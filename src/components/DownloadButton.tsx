@@ -1,0 +1,81 @@
+import { useState } from 'react'
+
+/** 一个平台下载项：'store' 弹提示文案（如 iOS 去 App Store），'file' 经官网后端流式下载正式资产。 */
+export type DownloadOption =
+  | { label: string; kind: 'store'; message: string }
+  | { label: string; kind: 'file'; downloadPath: string }
+
+interface DownloadButtonProps {
+  /** 无障碍标签，标明所属产品，如「CitizenApp」。 */
+  productLabel: string
+  options: DownloadOption[]
+}
+
+export default function DownloadButton({ productLabel, options }: DownloadButtonProps) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        aria-label={`下载 ${productLabel}`}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex items-center gap-1 text-xl font-bold text-gold-400 transition-colors hover:text-gold-300"
+      >
+        下载
+        {/* 折线 chevron(非实心三角):收起指向下,展开旋转 180° 指向上。死规则禁 ▶▼ 实心三角。 */}
+        <span className={`transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true">
+          <svg viewBox="0 0 12 12" width="12" height="12" className="block">
+            <polyline
+              points="2,4 6,8 10,4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+      </button>
+
+      {open && (
+        <>
+          {/* 点击菜单外任意处关闭。 */}
+          <div className="fixed inset-0 z-40" aria-hidden="true" onClick={() => setOpen(false)} />
+          <div
+            role="menu"
+            className="absolute right-0 z-50 mt-2 min-w-[168px] overflow-hidden rounded-xl border border-gold-500/30 bg-navy-950/95 shadow-2xl shadow-black/40 backdrop-blur-xl"
+          >
+            {options.map((option) =>
+              option.kind === 'store' ? (
+                <button
+                  key={option.label}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false)
+                    window.alert(option.message)
+                  }}
+                  className="block w-full px-4 py-3 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-white/5 hover:text-gold-300"
+                >
+                  {option.label}
+                </button>
+              ) : (
+                <a
+                  key={option.label}
+                  role="menuitem"
+                  href={`/api${option.downloadPath}`}
+                  onClick={() => setOpen(false)}
+                  className="block w-full px-4 py-3 text-left text-sm font-medium text-slate-200 no-underline transition-colors hover:bg-white/5 hover:text-gold-300"
+                >
+                  {option.label}
+                </a>
+              ),
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}

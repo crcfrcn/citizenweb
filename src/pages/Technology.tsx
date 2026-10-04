@@ -1,0 +1,249 @@
+import SectionTitle from '../components/SectionTitle'
+import GlowCard from '../components/GlowCard'
+
+const techStack = [
+  { label: '核心语言', value: 'Rust 2021' },
+  { label: '区块链框架', value: 'Substrate / Polkadot SDK' },
+  { label: '网络协议', value: 'libp2p / litep2p' },
+  { label: '签名算法', value: 'Sr25519' },
+  { label: '哈希算法', value: 'Blake2' },
+  { label: '存储引擎', value: 'RocksDB' },
+  { label: '运行时', value: 'WASM' },
+  { label: '终局性', value: 'GRANDPA' },
+]
+
+const pallets = [
+  {
+    name: 'PoW 共识',
+    module: 'pow-difficulty',
+    desc: '工作量证明挖矿机制，动态难度调整，保障全节点公平参与出块',
+  },
+  {
+    name: 'GRANDPA 终局性',
+    module: 'grandpakey-change',
+    desc: '44 个权威节点参与 GRANDPA 终局性投票，确保区块不可回滚',
+  },
+  {
+    name: '链上公民身份',
+    module: 'citizen-identity',
+    desc: '保存投票和参选所需的最小身份字段，为选举、公投和人口快照提供可信数据源',
+  },
+  {
+    name: '公民发行',
+    module: 'citizen-issuance',
+    desc: '经链上公民身份登记的公民获得公民币发行，按登记顺序和奖励规则释放',
+  },
+  {
+    name: '全节点发行',
+    module: 'fullnode-issuance',
+    desc: '全节点通过 PoW 出块获取区块奖励，奖励逐块释放，跨约 1000 万区块',
+  },
+  {
+    name: '立法与法律',
+    module: 'legislation-yuan',
+    desc: '把公民宪法和普通法律以结构化版本上链，承接制定、修改、废止法律的执行结果',
+  },
+  {
+    name: '选举投票',
+    module: 'election-vote',
+    desc: '支持公民普选和公权机构成员互选，读取链上公民身份与职位选民快照',
+  },
+  {
+    name: '投票引擎',
+    module: 'votingengine',
+    desc: '四种投票引擎：内部投票、联合投票、立法投票、选举投票，链上透明计票',
+  },
+  {
+    name: '决议发行',
+    module: 'resolution-issuance',
+    desc: '货币增发提案、联合投票与发行执行统一闭环，需经多级治理审批通过方可落账',
+  },
+  {
+    name: '机构与管理员',
+    module: 'entity / admins',
+    desc: '公权机构、私权机构、个人多签和管理员集合由链上模块统一约束生命周期',
+  },
+]
+
+const topNodeTypes = [
+  {
+    type: '全节点',
+    count: '无限',
+    desc: '任何组织或个人均可运行，参与 PoW 出块',
+    features: ['PoW 出块', '交易验证', '去中心化'],
+  },
+  {
+    type: '轻节点',
+    count: '无限',
+    desc: '公民用户运行的轻客户端（CitizenApp），完成链上公民身份后可参与链上投票',
+    features: ['公民身份', '转账交易', '投票交互'],
+  },
+]
+
+const bottomNodeTypes = [
+  {
+    type: '国家储委会权威节点',
+    count: '1',
+    desc: '国家级货币发行控制，19 位管理员多签治理',
+    features: ['国家铸币权', '全网治理', '13/19 多签', '联合投票'],
+  },
+  {
+    type: '省储委会权威节点',
+    count: '43',
+    desc: '省级储备管理，每省 9 位管理员',
+    features: ['省铸币权', '省级治理', '联合投票', '6/9 多签'],
+  },
+  {
+    type: '省储行权益节点',
+    count: '43',
+    desc: '省级金融服务执行，9 位董事管理',
+    features: ['金融服务', '质押利息', '链下支付', '联合投票'],
+  },
+]
+
+export default function Technology() {
+  return (
+    <>
+      {/* Hero */}
+      <section className="relative overflow-hidden py-24 md:py-32">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute left-1/4 top-0 h-[500px] w-[600px] rounded-full bg-navy-500/10 blur-3xl" />
+          <div className="absolute right-1/4 top-1/3 h-[400px] w-[500px] rounded-full bg-gold-500/5 blur-3xl" />
+        </div>
+        <div className="relative mx-auto max-w-7xl px-6">
+          <SectionTitle
+            subtitle="区块链技术"
+            title="基于 PoW共识 的主权区块链"
+            description="采用 Rust 语言与 Polkadot SDK 构建，PoW + GRANDPA 混合共识，WASM 可升级运行时，并内置链上中国平台承接注册、立法、选举和机构治理入口。"
+          />
+        </div>
+      </section>
+
+      <div className="mx-auto h-px max-w-7xl bg-gradient-to-r from-transparent via-gold-500/30 to-transparent" />
+
+      {/* Tech Stack */}
+      <section className="mx-auto max-w-7xl px-6 py-24">
+        <SectionTitle subtitle="技术栈" title="核心技术选型" />
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          {techStack.map((t) => (
+            <div key={t.label} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-5 text-center">
+              <div className="text-xs font-medium uppercase tracking-wider text-gold-400">{t.label}</div>
+              <div className="mt-2 text-sm font-semibold text-white">{t.value}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="mx-auto h-px max-w-7xl bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+      {/* Runtime Pallets */}
+      <section className="mx-auto max-w-7xl px-6 py-24">
+        <SectionTitle
+          subtitle="运行时模块"
+          title="链上 Pallet 架构"
+          description="模块化的 WASM 运行时，支持链上无分叉升级；业务模块提交提案语义，投票、计票和状态推进统一归投票引擎。"
+        />
+        <div className="grid gap-6 md:grid-cols-2">
+          {pallets.map((p) => (
+            <GlowCard key={p.name} glow="blue">
+              <div className="mb-1 text-xs font-mono tracking-wider text-navy-300">{p.module}</div>
+              <h3 className="mb-3 text-lg font-semibold text-white">{p.name}</h3>
+              <p className="text-sm leading-relaxed text-slate-400">{p.desc}</p>
+            </GlowCard>
+          ))}
+        </div>
+      </section>
+
+      <div className="mx-auto h-px max-w-7xl bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+      {/* Node Architecture */}
+      <section className="mx-auto max-w-7xl px-6 py-24">
+        <SectionTitle
+          subtitle="节点体系"
+          title="五类节点架构"
+          description="从国家级权威节点到公民全节点，构成完整的去中心化网络拓扑。"
+        />
+        {/* Top row: 全节点 + 轻节点 (centered) */}
+        <div className="mx-auto grid max-w-3xl gap-6 md:grid-cols-2">
+          {topNodeTypes.map((n) => (
+            <GlowCard key={n.type} glow="gold" className="flex flex-col">
+              <div className="mb-4 text-4xl font-extrabold text-gold-400">{n.count}</div>
+              <h3 className="mb-2 text-lg font-semibold text-white">{n.type}</h3>
+              <p className="mb-4 flex-1 text-sm text-slate-400">{n.desc}</p>
+              <div className="flex flex-wrap gap-2">
+                {n.features.map((f) => (
+                  <span key={f} className="rounded-md bg-gold-500/10 px-2 py-1 text-xs font-medium text-gold-300">
+                    {f}
+                  </span>
+                ))}
+              </div>
+            </GlowCard>
+          ))}
+        </div>
+        {/* Bottom row: 国家储委会 / 省储委会 / 省储行 */}
+        <div className="mt-6 grid gap-6 md:grid-cols-3">
+          {bottomNodeTypes.map((n) => (
+            <GlowCard key={n.type} glow="gold" className="flex flex-col">
+              <div className="mb-4 text-4xl font-extrabold text-gold-400">{n.count}</div>
+              <h3 className="mb-2 text-lg font-semibold text-white">{n.type}</h3>
+              <p className="mb-4 flex-1 text-sm text-slate-400">{n.desc}</p>
+              <div className="flex flex-wrap gap-2">
+                {n.features.map((f) => (
+                  <span key={f} className="rounded-md bg-gold-500/10 px-2 py-1 text-xs font-medium text-gold-300">
+                    {f}
+                  </span>
+                ))}
+              </div>
+            </GlowCard>
+          ))}
+        </div>
+      </section>
+
+      {/* Consensus */}
+      <section className="border-t border-white/10 bg-gradient-to-b from-navy-900/40 to-navy-950 py-24">
+        <div className="mx-auto max-w-5xl px-6">
+          <SectionTitle
+            subtitle="共识机制"
+            title="PoW + GRANDPA 混合共识"
+          />
+          <div className="grid gap-8 md:grid-cols-2">
+            <GlowCard glow="gold">
+              <h3 className="mb-4 text-xl font-semibold text-white">PoW 工作量证明</h3>
+              <ul className="space-y-3 text-sm text-slate-400">
+                <li className="flex gap-3">
+                  <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-gold-400" />
+                  全节点通过算力竞争出块权
+                </li>
+                <li className="flex gap-3">
+                  <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-gold-400" />
+                  动态难度调整确保稳定出块
+                </li>
+                <li className="flex gap-3">
+                  <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-gold-400" />
+                  任何人均可参与，去中心化保障
+                </li>
+              </ul>
+            </GlowCard>
+            <GlowCard glow="blue">
+              <h3 className="mb-4 text-xl font-semibold text-white">GRANDPA 终局性</h3>
+              <ul className="space-y-3 text-sm text-slate-400">
+                <li className="flex gap-3">
+                  <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-navy-300" />
+                  44 个权威节点参与终局性投票
+                </li>
+                <li className="flex gap-3">
+                  <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-navy-300" />
+                  确保已确认区块不可回滚
+                </li>
+                <li className="flex gap-3">
+                  <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-navy-300" />
+                  拜占庭容错，2/3+ 诚实即安全
+                </li>
+              </ul>
+            </GlowCard>
+          </div>
+        </div>
+      </section>
+    </>
+  )
+}
