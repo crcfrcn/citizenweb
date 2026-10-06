@@ -46,3 +46,12 @@ test('Vite默认把正式构建输出写入CitizenWeb源码外临时目录', () 
   assert.doesNotMatch(viteSource, /new URL\('\.\.\/dist'/u);
   assert.match(viteSource, /command === 'serve' \? developmentTLS\(\) : undefined/u);
 });
+
+test('白皮书中英文使用同一MLS设备身份与协议内部密钥', () => {
+  const source = readFileSync(join(projectPath, 'src/whitepaper.md'), 'utf8');
+  assert.match(source, /同一持久MLS身份/u);
+  assert.match(source, /one persistent MLS identity/u);
+  assert.match(source, /0x1C/u);
+  assert.match(source, /钱包签名不能恢复旧密文/u);
+  assert.doesNotMatch(source, /P-256|device subkeys|purpose keys|设备子钥|用途密钥/u);
+});
