@@ -1,13 +1,12 @@
 import { fileURLToPath, URL } from 'node:url'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { createSecureContext } from 'node:tls'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-// 本配置固定CitizenWeb产品根、前端插件、源码外构建输出和开发服务器读取边界。
+// 本配置固定CitizenWeb产品根、前端插件、自有target构建输出和开发服务器读取边界。
 const productRoot = fileURLToPath(new URL('..', import.meta.url))
 const workspaceRoot = fileURLToPath(new URL('../..', import.meta.url))
 
@@ -25,11 +24,16 @@ export function developmentTLS() {
 
 export default defineConfig(({ command }) => {
   const https = command === 'serve' ? developmentTLS() : undefined
+  const target = join(productRoot, 'target')
+  const outDir = process.env.CITIZENWEB_DIST || join(target, 'build', 'dist')
+  const difference = relative(target, outDir)
+  if (!isAbsolute(outDir) || resolve(outDir) !== outDir || difference === '' || isAbsolute(difference) || difference === '..' || difference.startsWith('..' + sep)) throw new Error('CitizenWeb输出必须归本产品target')
   return {
     root: productRoot,
     plugins: [react(), tailwindcss()],
+    cacheDir: join(productRoot, 'target', 'tmp', 'vite'),
     build: {
-      outDir: process.env.CITIZENWEB_DIST || join(tmpdir(), 'citizenweb', 'dist'),
+      outDir,
     },
     preview: { https },
     server: {

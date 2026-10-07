@@ -16,6 +16,18 @@
         {
           "id": "posix",
           "version": "27.0"
+        },
+        {
+          "id": "bash",
+          "version": "5.3.20"
+        },
+        {
+          "id": "grep",
+          "version": "3.12"
+        },
+        {
+          "id": "sed",
+          "version": "4.10"
         }
       ],
       "locks": [
@@ -48,8 +60,48 @@
             "id": "node",
             "version": "25.2.1"
           }
-        ]
-      }
+        ],
+        "version_source": {
+          "kind": "json",
+          "path": "package.json"
+        },
+        "record_source": {
+          "kind": "manifest",
+          "asset_names": [],
+          "metadata_asset": "release-manifest.json",
+          "source_field": "git_commit_sha",
+          "version_field": "software_version",
+          "marker_prefix": "GMB",
+          "immutable": false
+        }
+      },
+      "completion": "compile-only",
+      "files": []
     }
-  }
+  },
+  "remote_routes": [
+    {
+      "canonicalID": "citizenweb.web.ci",
+      "repository": "citizenweb",
+      "productID": "citizenweb",
+      "productTitle": "公民网",
+      "flow": "ci",
+      "platform": "web",
+      "expectedTitle": "公民网 · CI · Web",
+      "tagPrefix": null,
+      "recordsFormalRelease": false
+    },
+    {
+      "canonicalID": "citizenweb.web.release",
+      "repository": "citizenweb",
+      "productID": "citizenweb",
+      "productTitle": "公民网",
+      "flow": "release",
+      "platform": "web",
+      "expectedTitle": "公民网 · Release · Web",
+      "tagPrefix": "citizenweb-web-v",
+      "recordsFormalRelease": true
+    }
+  ],
+  "flow_entry": "scripts/flow.mjs"
 }

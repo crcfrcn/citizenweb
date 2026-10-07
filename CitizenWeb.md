@@ -1,0 +1,335 @@
+# CitizenWeb 技术文档
+
+## 当前工作目录归属（第8步，2026-10-06）
+
+本产品全部测试、编译临时数据和产物归 `/Users/rhett/citizenweb/target`。单平台不重复产品名或平台层，按build、ci、release、publish、test、tmp隔离。独立入口与控制台调用消费同一产品流程；控制台仅创建任务、调用与跟踪，不准备产品专用版本、依赖或步骤。下载半包、工具编译候选、工程视图、Runner步骤临时状态和测试夹具均属于当前产品工作区；永久工具与依赖原件继续归原件库。整个根target不进入Git、源码快照、程序摘要或打包输入。准确流程短锁、活跃任务保护、成功产物保护和原清理规则继续适用。
+
+第8、9步完成目录与路径实现、根文档迁移及测试源码维护，未运行测试、门禁、编译或安装。本文唯一原件位于/Users/rhett/citizenweb/CitizenWeb.md；产品接口及流程直接以本仓实际代码和声明为准，业务字典库与其检查已撤销，不另建登记副本。历史验收事实不表示本轮改造已经通过验收，统一测试在第10步进行。根技术文档由本仓门禁按原文、JSON解码值及既有补丁快照扫描机密，仅报告路径；文档迁出不减少资料安全检查。
+
+
+## 聊天功能的唯一产品归属
+
+**聊天客户端的逻辑功能只能在 TataChatSDK 中实现；聊天服务端的逻辑功能只能在 TataChatServer 中实现。公民、途遇及其他产品只依赖使用。**
+
+CitizenWeb 涉及聊天时只作为依赖使用方；本条不代表尚未接入聊天的产品已经具备聊天能力。
+
+- 消息、会话、群组、加密、协议、传输、同步、重试、聊天存储、附件、通话及聊天界面行为，按客户端与服务端职责分别归 TataChatSDK 和 TataChatServer；新增功能、缺陷修复和平台差异也必须在所属塔塔聊天产品内完成。
+- 消费产品只提供产品入口、身份与业务权益结果、服务地址及授权、主题和公开接口要求的平台配置；只通过公开接口接入，禁止复制、重写、包装成另一套聊天内核或维护产品专属聊天实现。CitizenServe、TuyuServe 的产品身份与权益授权不包含聊天数据面的实现职责。
+- 本机开发直接依赖仓库路径；公民、途遇等产品的正式版本依赖塔塔聊天正式 Release；第三方市场分发使用公开市场版本。依赖使用不以公开市场发布为前置条件，也不改变实现归属。
+
+本产品为单平台，受控缓存固定为 `citizenweb/target/<build|ci|release|publish>/`，不增加 `web/`、`runs/` 或 `start/`。Node 只读工程视图、`node_modules`、Vite/TypeScript状态、`dist`、临时文件和日志均进入准确流程目录。
+
+## 2026-09-02 本机 Web 编译入口
+
+TataConsole 已登记 `citizenweb.web.build`。锁定依赖使用受控 npm 公共缓存，单次
+`node_modules`、TypeScript/Vite 中间状态和 `dist` 全部位于独立受控工作目录，产品目录只被
+直接读取。编译输出仅在`citizenweb/target/build/`本轮候选中验真，不新增target产品目录；Build不发布网站。
+
+本文是 CitizenWeb 唯一技术事实文档。
+
+TypeScript、Vite 与 ESLint 配置统一位于 `citizenweb/scripts/`；`package.json` 的命令均显式传入对应配置路径，Node 版本约束由根清单 `package.json` 的 `engines` 唯一声明。
+
+### 官网模块技术文档
+
+#### 1. 模块定位
+
+`citizenweb/` 是 GMB 官网前端工程，用于对外展示公民区块链与项目基础信息。
+
+该模块只负责公开官网页面、白皮书展示、公民宪法读链展示和 CitizenApp 会员订阅发起页，不承载 CitizenChain、链上中国、CitizenApp 或 CitizenWallet 的信任根逻辑。
+
+白皮书唯一真源位于 `citizenweb/src/whitepaper.md`，官网白皮书页通过 Vite raw import 读取该文件；白皮书图片资源继续通过官网构建流程打包展示。
+
+公民宪法唯一真源在**链上** `LegislationYuan.LawVersions[0][effective_version].chapters`（创世值 = runtime 内置 `constitution.scale`）。官网不打包宪法正文，改由 Cloudflare Worker 读链下发（见 3.3），与 CitizenApp / 区块链节点 / 链上中国四端同源，修宪后自动更新。
+
+#### 2. 当前技术栈
+
+- 前端框架：React
+- 类型系统：TypeScript
+- 构建工具：Vite
+- 样式：Tailwind CSS Vite 插件与本地 CSS
+- 生产产物目录：`citizenweb/dist/`
+- 白皮书正文：`citizenweb/src/whitepaper.md`
+- 会员订阅页：`citizenweb/src/pages/Membership.tsx`
+
+#### 3. 本地构建
+
+在 `citizenweb/` 目录执行：
+
+```bash
+npm run build
+```
+
+该命令会先执行 TypeScript 构建检查，再执行 Vite 生产构建。发布前必须确认该命令通过。
+
+官网使用独立规范路由 `citizenweb.web.{ci,release}`。CI 与 Release 从锁文件安装依赖，
+要求 `npm audit --audit-level=low`、ESLint、候选契约测试与正式构建全部通过，再由
+`tataconsole/console/citizenweb/{ci,release}.mjs citizenweb-release` 生成相同结构的完整候选与确定性归档。它不复用
+CitizenApp 或后端 workflow，不读取 Cloudflare 生产令牌，也不创建 Pages Deployment。
+官网版本唯一来自 `citizenweb/package.json` 与锁文件，由 TataConsole 的统一版本算术推进。
+
+白皮书内容、首页发行量、链上中国卖点、技术页、生态页和会员页更新后，必须至少访问首页、技术页、生态页、代币经济页、会员订阅页和白皮书页确认页面可正常渲染。
+
+#### 3.2. 会员订阅页
+
+- `/membership` 只介绍自由、民主、薪火三档会员及对应权益，不创建订单、不收款、不保存
+  会员状态，也不提供任何外部支付入口。
+- 会员购买、续订、取消和换档统一在 CitizenApp 内完成；热钱包签名后提交链上交易，付款唯一
+  使用公民币。平台价格唯一真源为 finalized `SquarePost::PlatformPrice`。
+- 会员权益真源是链上 `Subscriptions[(cid_number, Platform)]`；CitizenApp Worker / D1 只保存
+  可重建的 finalized 镜像与确认记录，不接收外部 webhook，也不得独立授予权益。
+- 官网会员页的档位、媒体额度和聊天附件上限必须与 CitizenApp 内置三张会员卡及链上价格
+  同步；身份与会员仍是两个独立业务信号，任意身份可购买任意会员档。
+- 官网与 API 统一使用 `www.crcfrcn.com`：production 默认同源调用 `/api`，不得恢复 `workers.dev` 或独立 API 子域名；`VITE_API_URL` 仅用于明确的本地联调构建。
+
+#### 3.3. 公民宪法页（读链）
+
+- `/constitution` tab 位于导航「白皮书」与「关于我们」之间（`Header.tsx` navItems），lazy 加载 `pages/Constitution.tsx`，UI 复用白皮书 `whitepaper-*` 样式（左目录树 + 右正文 + 回顶），另加 `constitution-*`（版本标签、不可修改徽章、章标题复位）。
+- 数据源：`GET {VITE_API_URL||'/api'}/constitution`（Cloudflare Worker），返回结构化 `citizenapp.constitution`：`{version, content_hash, version_label{cn,en}, immutable_articles[], chapters[章>节>条>款 + 中英]}`。官网用 **JSX 直接渲染**（无 `dangerouslySetInnerHTML`），中英并列、条级「不可修改条款 · Immutable」徽章、顶部版本标签、底部链上内容摘要。
+- Worker 侧（`citizenserve/src/chain/constitution.ts`）：经 CF Access 反代用**已放行的 `state_getStorage`** RAW 读 `Laws[0]`→显式 `effective_version`（只展示已生效版，不露待生效修宪版，ADR-027 §6.1）→`LawVersions[0][v]` / `LawVersionLabels[0][v]` / `ConstitutionImmutableManifest`，TS 逐字节 SCALE 解码（字段序对齐 runtime `legislation-yuan`；`houses` 为 `Vec<CidNumber>`，每项按 SCALE `Vec<u8>` 读取），KV 短缓存 `CONSTITUTION_TTL_SECONDS`（缺省 300s，修宪后一个 TTL 内刷新）。安全口径与节点 `constitution_getDocument` 一致（RAW 读，不走可被恶意升级伪造的 runtime API）。
+- 该页公开只读，Worker guard 早返回放行、无会话门禁；解码器单测以真 `constitution.scale` 为夹具（`test/constitution.test.ts`）。
+
+#### 3.1. 白皮书结构维护记录
+
+- 2026-07-01：白皮书运行时章节按当前模块边界重排为投票引擎、治理模组、管理员模组、公权业务模组、实体模组、发行模组、交易模组和其他模组。
+- 2026-07-01：节点章节拆为节点简介、治理机构、链下清算行；链上中国章节拆为链上中国简介、注册局、链上立法、链上选举。
+- 后续更新白皮书时，应继续以 `citizenweb/src/whitepaper.md` 为唯一正文真源，并保持目录锚点与正文标题同步。
+
+#### 3.4. 产品页下载按钮（CitizenServe 白名单代理）
+
+- 产品页（`pages/Ecosystem.tsx`）三卡右上角各有醒目「下载」按钮（金色 `text-gold-400`、`text-xl`、加粗），点击弹出平台下拉（`components/DownloadButton.tsx`，自带点击外部关闭）。
+- 文件下载由 `DownloadButton.tsx` 生成同源 `/api${downloadPath}`，再交给 CitizenServe 的既有
+  白名单下载入口解析正式发布记录；CitizenWeb 不直接拼接 GitHub Release 地址或资产名。
+- 下载发布指针唯一保存于 CitizenServe 绑定的 D1 `citizenweb-download`；CitizenWeb 只拥有公开页面与
+  下载入口展示，不拥有数据库实现、凭据或发布写入逻辑。
+- 各卡公开选项与当前服务端路径：
+  - 公民 CitizenApp：`iOS`（弹提示去 App Store，无直链）/ `Android` → `/download/citizenapp/android`
+  - 公民钱包 CitizenWallet：`iOS`（弹提示）/ `Android` → `/download/citizenwallet/android`
+  - 公民链 CitizenChain：`macOS` → `/download/citizenchain/macOS`、`Windows` →
+    `/download/citizenchain/Windows`、`LinuxARM` → `/download/citizenchain/LinuxARM`、
+    `LinuxAMD` → `/download/citizenchain/LinuxAMD`
+- CitizenChain 的 `label` 与公开下载路径平台段使用同一个标准平台名；CitizenServe 在服务端
+  类型化边界内映射到既有内部发布键。旧架构拼接路径不保留兼容入口。本次只完成源码合同迁移，
+  没有部署 CitizenWeb/CitizenServe，也没有修改 Release Tag、资产名、manifest 或生产 D1。
+- iOS 为纯提示文案（`window.alert`），暂无 App Store 直链。
+
+#### 3.5. 标签页标题与图标
+
+支持页 `src/pages/Support.tsx` 的公开问题链接唯一指向
+`https://github.com/crcfrcn/citizenweb/issues`，新窗口使用 `rel="noreferrer"`。
+既有 `scripts/release/check/release_manifest.test.mjs` 精确读取实际链接属性，锁定账号、仓库、HTTPS 和
+新窗口保护，避免正确地址仅出现在注释而实际跳往错误位置；不改变下载或发布行为。
+
+- `index.html`：`<title>公民链｜中华联邦公民储备委员会</title>`；`<link rel="icon" type="image/png" href="/src/assets/favicon.png">` = 官网国旗图（`src/assets/favicon.png`，由 `src/assets/flag-emblem.png` `sips -Z 128` 生成）。原紫色闪电 `favicon.svg` 已删。
+
+#### 4. 线上部署口径
+
+当前官网由 Cloudflare Pages 项目 `citizenweb` 承载，正式域名为
+`https://www.crcfrcn.com`；`/membership` 与同源 `/api` 共同组成官网订阅入口。
+TataConsole 不提供独立“公民网”卡片，官网在公民云内拥有独立的“运行 CI / Release /
+发布”产品线，并与后端分列两行。官网发布按钮只有在本机存在成功 CitizenWeb Release 记录时
+可用；服务端再次锁定该版本，下载候选在任何 Pages 变更前必须证明 manifest 版本完全一致。
+
+CI 与 Release 的完整候选固定包含构建后的 `dist/`、package/lock、严格
+`release-manifest.json`、`SHA256SUMS` 和确定性 `citizenweb-release.tgz`。公开文件
+`dist/citizenweb-release.json` 与 manifest 都必须准确记录 `delivery_channel: web`、
+`software_version`、`git_commit_sha` 与全部静态资源摘要。Web 是交付渠道，不是宿主平台；两个
+制品使用各自精确字段闭集，禁止旧 `platform`、新旧双写或任意额外身份字段。Release 只固化
+准确 Actions run；本机不得重新构建或覆盖同版本不同内容。
+
+发布由本机 TataConsole 使用公开配置 `CF_ACCOUNT_ID` 与 Pages 最小权限发布密钥
+`WEB_DEPLOY` 执行；必须先通过 QR_V1 sr25519 冷签，再逐次 Touch ID，且不保存第二份官网
+账户或令牌。GitHub 只形成正式 Release，不执行 Pages 发布。固定事务严格执行：
+
+1. 下载最新成功 `citizenweb-<software_version>` GitHub Release，安全解包并复核 manifest、
+   公开版本标记、Web 交付渠道、tag、目标 Git SHA、全部哈希和规范归档。
+2. 记录当前成功 production deployment id 和旧公开版本标记。
+3. 把 Release 内同一 `dist/` 原样部署到固定预览环境，逐文件下载并比对 SHA-256。
+4. 预览全部通过后，才把同一 `dist/` 原样部署到 `main` 生产。
+5. 通过 `https://www.crcfrcn.com/citizenweb-release.json` 与全部公开文件复核准确版本、Git SHA
+   和字节内容。
+6. 生产尝试后失败时调用 Cloudflare Pages 官方 rollback API 恢复先前成功 deployment，并
+   复核旧版本；预览失败时生产保持不变。
+
+发布流程不保留本机依赖安装、lint、重构建、当前工作区直传、仅 HTTP 200 验收、本地预览端口、
+测试 PID、测试日志、SSH/Nginx 发布路线、GitHub publish workflow 或其它影子部署流程；只允许
+TataConsole 固定本机执行器消费已经由 CI/Release 双重验真的正式 Release。
+
+## CI 增量缓存
+
+Web CI 已接入统一 CI 缓存，仅缓存 npm 与 XDG 可再生成状态；发布产物不进入 CI 缓存。
+
+## Release 全量构建（第 7.4 步）
+
+正式 Release 固定从干净源码执行全量构建，显式关闭 Rust 增量编译及工具链内置缓存，不读取CI作业缓存且不复用本机编译中间物。版本、签名、校验、产物和发布流程保持原有产品合同。
+
+## 双仓统一流程最终收口（第 7.5 步）
+
+本产品执行统一流程规则：本机编译中间物只进入本轮塔塔缓存库的build目录并按终态规则清理；GitHub CI 的作业过程数据只进入该次Runner任务空间；正式Release从干净编译状态执行。源码不进入塔塔缓存库、塔塔依赖库或塔塔产物库。
+
+## CitizenChain 标准下载路径验证（GMB 第 2.6 步，2026-09-02）
+
+- `Ecosystem.tsx` 的 CitizenChain 下载数组精确锁定四个标准平台名及四条同名公开路径；六条旧
+  架构拼接或小写路径仅进入负向断言，不能回流到生效页面源码。
+- `release_manifest.test.mjs` 9/9 通过；CitizenServe 两个定向测试文件 17/17、跨仓
+  `repo_guard` 13/13、TataConsole 静态合同 1/1 和 macOS 原生下载合同 XCTest 1/1 均通过。
+- 本步没有执行官网构建、远程 CI、正式 Release、Pages 发布或任何生产部署。
+
+## CitizenWeb 交付渠道合同（GMB 第 2.9 步，2026-09-02）
+
+- CI 与 Release 两个入口的内嵌 CitizenWeb 制品实现继续逐字节一致，SHA-256 均为
+  `0b14e67bd2b80a2ca5f99dfc232e8c2f738fc9211a0db0e2f2a0fd260c62a01d`。两者生成的
+  `release-manifest.json` 和 `dist/citizenweb-release.json` 只使用
+  `delivery_channel: web`；字段缺失、错误值、旧 `platform`、双写和额外字段全部失败关闭。
+- `assets_sha256` 仍只覆盖真实静态资源；公开版本标记继续由 manifest 文件清单与
+  `SHA256SUMS` 逐字节绑定。TataConsole 原生发布器在任何 Pages 变更前独立解析并比较两份身份的
+  产品、渠道、版本、Git SHA 和静态资源摘要。
+- 本机定向验证全部通过：CitizenWeb 合同 11/11、GMB 跨仓守卫 17/17、
+  CloudflarePublisher XCTest 40/40，共 69 项；Node语法、Rust格式及两份内嵌
+  实现哈希一致性检查也通过。Rust 守卫首轮唯一失败是新断言把三处正确渠道写入误计为两处，
+  修正守卫期望后完整 17/17 通过，产品实现没有因此回退。
+- QR_V1、action、恢复状态、`citizenweb:web` 目标键以及现有 canonical ID 中的
+  `platform=web` 仍是另一项签名或持久化 wire 合同；本步没有局部改名或双写。彻底迁移必须与
+  CitizenWeb、TuyuWeb、受控注册表、路由、状态模型和签名端同时原子完成。
+
+- 本步未修改 `product.mjs`、`准确Job的`execute.mjs`、`准确Job目录`、受控 registry/routes、Tag、作业
+  ID、资产名或生产数据；未启动、停止、安装或重启 TataConsole，也未运行 Git、远程 CI、正式
+  Release、Pages 发布或部署。上线时必须先生成新格式正式 Release，再启用严格新发布器，禁止
+  让新发布器消费旧格式候选。
+### Build与Start物理归属（2026-09-12）
+
+本产品Build、CI和Release唯一实现位于产品scripts目录；TataConsole只按固定身份调用。Start由TataConsole启动产物库中的macOS成功产物，产品不实现Start。
+
+- citizenweb：
+  - `citizenweb.web.build` → `tataconsole/console/citizenweb/build.sh`
+
+## CI与Release入口归属
+
+本产品CI与Release由所属仓当前`scripts/flows.json`的remote_routes及各平台Workflow声明定位，完整执行入口为本仓`scripts/flow.mjs`。控制台读取当前声明、创建原有真实任务、获取准确仓权限并跟踪原Run；旧控制台CI/Release Shell与Swift执行文件已删除，不作为入口。
+
+## 独立 GitHub CI 与 Release 工作流
+
+本产品每个实际产品、平台、流程身份使用下列独立文件，主 Job 为 `flow`；CI 验证源码，Release 生成正式产物，发布由塔塔控制台的独立 Publish 流程负责。
+
+- `.github/workflows/citizenweb-web-ci.yml`
+- `.github/workflows/citizenweb-web-release.yml`
+
+## 目录整合与平台输入
+
+图标位于 `src/assets/favicon.png`，HTML 通过 Vite 处理的 `/src/assets/favicon.png` 引用；发布合同测试位于 `scripts/release/check/release_manifest.test.mjs`，测试根仍为产品根。原 Workflow 固定入口保持不变。
+
+本产品正式Release主flow Job实际创建GitHub版本，contents权限准确为当前仓write；辅助Job与其它权限保持原登记。源提交、成功CI、版本及资产验真不放宽，不派发发布。
+## 完整产品组织与执行合同
+
+所有者：`citizenweb`，正式源码根 `/Users/rhett/citizenweb`；本说明属于该完整产品。组件不会拆成独立仓库或目录产品。所有执行身份统一为 `产品.平台.流程`，单平台仅在控制台显示和物理目录中省略平台层。
+
+真实平台目标：`web`。
+
+推送门禁唯一源码位于 `/Users/rhett/citizenweb/.github/tatagate/`，GitHub入口 `/Users/rhett/citizenweb/.github/workflows/tatagate.yml`。控制台先从本仓已保存提交执行这份门禁，通过后推送准确SHA；GitHub main push再执行同一提交的门禁，控制台核对所属仓、Workflow、main、SHA、Run和attempt，只有success并再次回查main一致才完成推送。失败、取消、超时或身份漂移均不得显示成功，不自动重试或派发CI/Release。
+
+技术文档由所属完整产品仓根唯一持有；私有规则和任务库由控制台私仓持有，公开产品不读取它们。公开门禁不依赖私仓资料、安装包源码、其它本机产品或个人账号；必要链真源先锁定公开main的实际SHA后只读该SHA。本机开发跨产品验收仍比较三仓已保存快照与各端真实镜像。
+
+### 门禁与开发审查职责
+
+准确中文注释按开发阶段逐项复核，不以保留源码每文件包含汉字作为仓库门禁的开发凭证。初始完整内容、生成文件和上游原件保持原文；真实第一方临时注释、机密、源码输出、Workflow、依赖和适用测试仍由本仓同提交门禁验真。公民门禁只把scripts中的Node命令行结果报告识别为CLI输出；本仓实际执行测试的准确协议拒绝断言不属于新运行协议，字符串、注释、模板和未登记测试中的同文不豁免。保存及推送仍逐仓独立授权，并以本机门禁和同SHA的GitHub门禁双成功为唯一终态。
+
+公网 TLS 由 Cloudflare Edge 提供。Vite 开发与预览只启动 HTTPS，要求调用方通过 CITIZENWEB_TLS_CERT_FILE、CITIZENWEB_TLS_KEY_FILE 传入可信证书/私钥文件路径；缺失、无效或不匹配时失败，不回退明文，静态构建不要求服务证书。测试使用系统临时目录的合成 TLS 材料并实际完成 TLS 1.3 的可信 HTTPS 握手，结束即清理，不进入 target 或源码。
+
+门禁仅对既有两份 TypeScript 配置接受合法 JSONC 注释；普通 JSON 继续严格解析，原注释完整保留。
+
+## 产品介绍与开源许可
+
+根目录 `README.md` 仅提供本产品简明介绍，不承载技术方案、任务记录或验收结论。独立自有代码采用根 `LICENSE` 的MIT；上游代码、衍生修改、依赖及组合分发遵循各自原许可、版权、例外与附加要求。
+
+### 本机Build代码所有权
+
+本产品的scripts/flows.json声明自身平台、准确工具版本、原始锁以及既有CI/Release入口；scripts/build.mjs独立实现requirements、prepare、build三个阶段，拥有工程准备、编译命令、候选验真和失败条件。产品只消费调用方交付的公开资源回执，按本仓原始锁取得依赖，所有生成状态进入规范源码外工作目录。平台或资源身份不符、版本错误、缺锁、链接越界、归档摘要错误、旧工程复用或编译器失败均立即失败。
+
+## 白皮书中的客户端秘密合同
+
+中英文白皮书统一声明：钱包之外，公民客户端使用 TataChatSDK 持久化的同一本机 MLS Ed25519 身份及 MLS 协议内部状态。初次登记由当前 CID 绑定钱包签署 `0x1C` 域的同一32字节 MLS 公钥；普通请求使用该 MLS 身份证明，不增加独立设备认证钥或应用用途钥。私人本地记录由操作系统保护，MLS 网络协议仍负责加密与成员验证。新成员通过有效 KeyPackage、Welcome、Commit 加入；丢失全部 MLS 状态不能用钱包私钥恢复旧组。
+
+链节点内置白皮书必须从已保存、已登记验真的官网固定提交正式生成。源码检查应同时覆盖两种语言，禁止把尚未更新的内置资料当作当前合同。
+
+本轮源码固定提交为 `b9276f147e4b7fc1f14ec1905e8b7225d0d6fbea`；链节点内置资料已从该已保存、已登记的不可变Git原件正式生成。源码测试仍等待整批修改完成后统一运行。
+
+
+### 产品独立资源与编译入口
+
+本产品的scripts/flows.json声明自身平台、准确工具版本、原始锁以及既有CI/Release入口；scripts/build.mjs独立实现requirements、prepare、build三个阶段，拥有工程准备、编译命令、候选验真和失败条件。产品只消费调用方交付的公开资源回执，按本仓原始锁取得依赖，所有生成状态进入规范源码外工作目录。平台或资源身份不符、版本错误、缺锁、链接越界、归档摘要错误、旧工程复用或编译器失败均立即失败。
+
+本产品平台闭集为`web`。调用格式为`node scripts/build.mjs <requirements|prepare|build> <platform> --work <绝对工作目录>`；requirements只读并输出唯一JSON，prepare/build从标准输入读取schema=1的资源回执。调用方交付准确工具执行器、锁定依赖目录、Git来源和归档后先prepare，再读取展开来源新增的需求，完整交付后执行build。准备、展开和编译属于同一调用工作根，各平台互不共享可写状态。独立调用方按本仓声明准备资源即可运行，无需读取其他产品工作树或私有资料。
+
+Git依赖只接受本仓声明与锁一致的HTTPS地址及40位固定提交；原生归档只接受本产品锁定坐标及完整SHA-256。工程副本排除旧生成物，内部文件链接重映射到同轮副本，外部链接与已有工程拒绝。原始依赖缓存必须显式交付，不能落入用户默认缓存；离线编译禁止隐式取得缺失资源。已有CI/Release Workflow仍各自调用本仓scripts，不受本机可视化入口是否存在影响。入口回归由本仓`scripts/build.test.mjs`负责，适配与资源服务的验证不替代产品编译和真实候选验收。
+
+
+## 2026-10-06 产品自主资源阶段（第2步）
+
+本仓`scripts/resources.mjs`拥有工具准确来源/版本/配方、递归锁解析、缺失获取、验真、复用和本轮依赖准备；`scripts/build.mjs resources <platform> --work <绝对外部工作根>`调用同一实现，独立入口为`resources.mjs <platform> --work <工作根> [--offline]`。前者从stdin读取公开身份回执；后者允许空请求。最小宿主必须使用本仓声明的官方Node25.2.1绝对入口，本机配方限定macOS ARM；资源阶段回读官方发行归档与运行Node字节，不能从PATH取同名程序。工作根预先存在、位于源码外且不经过链接。
+
+可选`PRODUCT_TOOL_ROOT`只供读取工具原件，`PRODUCT_DEPENDENCY_ROOT`只供读取依赖原件；产品不读取供给者的版本决策或私有任务变量。独立缺省原件库为源码外`~/.local/share/product-resources`，本轮可写状态仅在work。GNU Bash/grep/sed纳入自身需求；发行件旧Shell仅用于声明中的首次GNU构建，不进入正式PATH。下载/源码工具编译不持全局锁，最终不可变对象提交使用短锁，取消传递到工具进程组。错误摘要、损坏、未锁来源、路径越界和显式离线缺失失败并保留可疑原件。
+
+Pub/npm/Cargo按原始锁准备；Git按固定HTTPS提交检出，Git Cargo目录源展开workspace继承并锁定相对包版本；CocoaPods按准确锁摘要恢复验真快照，缺失spec校验规范摘要，未锁源码来源拒绝取得。Android固定包与修订归产品；额外平台仅消费官方固定发行来源与发行树摘要，不借宿主历史SDK目录。Maven供给只读验真后复制到独占Gradle缓存，由产品准备现有配置，消费仍离线；全库坐标导入与旧目录清理留到第5步。
+
+`PRODUCT_WORK_DIR`、`PRODUCT_BASH_BIN`、`PRODUCT_RSYNC_BIN`及`PRODUCT_SOURCE_DIR`是公开工作/工具/工程入口；Flutter修订不读取调用方私有变量，也不回退系统rsync。旧Flutter补丁对象与当前配方不符时拒绝复用，真实替换须按准确资源操作另行授权。本步不改变编译、签名、安装及回读顺序，不修改产品UI，也未执行真实工具下载/安装。受控资源测试不能代替官方首次取得、正式编译或最终真实运行验收；第4至7步仍待逐步确认实施。
+
+资源原件按完整内容验真后整体提交：Git bundle与固定来源/摘要回执处于同一个不可变对象，不暴露中间状态；可选依赖供给读取`objects/<SHA256>.blob`。锁解析器、源码工具依赖与官方有序补丁也从同一产品原件存储复用。Pod spec每次按锁中的规范checksum回验，Git tag只核对发行声明并消费本产品预锁提交；HTTP发行件消费固定SHA256，首次源码准备命令来自该已验真spec并由GNU Bash执行。spec、准备后源码与文件清单整体提交，再复制到本轮缓存；供给索引不决定产品版本。正式PATH排除旧POSIX Shell，`sh`对应已验真的GNU Bash。
+
+独立缺省资源目录内`tools`保存工具发行件及工具编译输入，`rely`保存产品依赖的归档、Git和Pod原件；工作区只承载本轮可写视图。根据用户最新要求，分步骤先完成实现与用例，整项解耦任务完成后统一测试；本步实施记录不等于真实工具首次取得、完整Build或安装验收通过。
+
+
+### 第3步：产品完整Build入口（2026-10-06）
+
+本产品的正式完整入口为已锁定Node的绝对路径调用`/Users/rhett/citizenweb/scripts/build.mjs execute <platform> --work <已存在绝对工作根>`，可选`--offline`。输入stdin可为空；调用方可传schema/product_id/platform/work及真实run_id/program_digest，禁止私有变量或执行命令。入口内部完成需求→资源→准备→再次需求/资源闭包→编译→适用签名/安装/回读；独立与控制台调用同一实现。最小引导Node只启动本产品的资源引导器，产品按自己的官方Node声明验真、准备并重入，控制台运行Node不决定产品Node版本。
+
+标准输出只有唯一有界JSON：schema、product_id、platform、work、completion、files及可选真实run_id。completion沿用固定平台的device-install/macos-artifact/compile-only；files按本产品flows.json登记路径和SHA256。编译日志使用stderr进入现有任务日志，不新增资源任务或任务状态。完整结果只在各阶段成功、源码/锁不漂移、工具进程确认退出后落入本轮build-result.json；同根并发或复用旧结果拒绝，取消/失联/错误身份/损坏候选不得成功。
+
+控制台每次Build直接读取本产品当前flows.json入口，调用一次execute；控制台只跟踪真实任务、核验公开结果和保存产物，不解释产品工具、依赖、编译参数或设备规则。当前控制台静态菜单、其它产品流程/安装器与程序摘要的历史耦合仍归第4步解除，本步不能当作整项解耦已完成。
+
+本步同步完整入口、失败/取消/并发、结果/路径/摘要及适用移动端用例，但未运行测试、语法检查、编译、签名、安装或工具下载/替换；全部实现步骤完成后统一验收。源码交付与用例存在不代表真实Build已经通过。
+
+
+### 第4步实施中：远端路由当前声明
+
+CI/Release的规范身份、标题、版本前缀和正式版本记录标志已迁入所属仓现有scripts/flows.json的remote_routes。调用方按固定已接入动作重读当前声明；原生授权与流程查询不再使用编译期产品路由常量。产品声明只提供数据，不授予凭据、扩大平台矩阵或新增按钮。损坏、重复、越仓、字段越界及超限拒绝。
+
+本次同步路线读取、热更新和失败边界用例，未运行测试、语法检查、编译、签名、安装或下载。第4步仍在开发中：Publish执行器、聊天安装器、Start、固定菜单声明与完整程序摘要的其余实际耦合尚未解除，不能报告该步或整项任务完成。
+
+### 产品远端完整入口
+
+本仓`scripts/flows.json`的`flow_entry`定位公开`scripts/flow.mjs`。`run ci <platform>`和`run release <platform>`分别执行同一产品流程，当前读取本仓Workflow与路由；Release的`version_source`声明准确版本文件类型和相对路径。成功CI选择、同源候选复用、版本递增、正式Release验真与旧Run/Artifact清理均由本产品入口完成。独立执行只需等价的本仓短期GitHub权限；没有宿主控制管道时入口自行跟踪Run，不依赖其它产品程序。
+
+可选`PRODUCT_CONTROL_FD=3`只接受当前Run绑定确认、候选持久化确认和二值远端终态；令牌仅进入HTTPS请求头，未知身份、越仓、无成功CI、候选错源、控制帧错误、超时或取消均失败。宿主重启后的`recover`使用同一公开入口核验原Run、原候选并清理，不重新派发。公开控制协议不携带私有调用方变量，现有授权及用户操作顺序保持。源码、声明或Workflow在本次流程期间变化将拒绝继续。
+
+相关正常、失败、身份、版本来源、独立远端跟踪、候选重试和真实控制管道边界用例位于本仓`scripts/flow.test.mjs`；当前只完善源码，尚未运行用例或远端操作。
+
+
+### 产品软件记录与正式版本恢复
+
+本仓公开`scripts/flow.mjs records`使用准确同仓短期GitHub权限，重读本仓当前路由，复用远端流程同一Run保留器并确认实际删除，再读取各平台最新正式版本。来源合同归本仓release.record_source：按实际产品选择Tag、单包正文或正式元数据资产验真，标题、版本、源码与适用不可变标志不能由调用方推测。准确元数据资产仅经官方HTTPS地址读取，跨主机不转发仓库令牌。正式资产和Tag不会在记录刷新中删除。公开结果仍是records/removed_run_ids，原记录页行为保持。
+
+`recover`不重新派发；重新核验原候选、成功CI、原Run终态、正式资产来源与Tag，输出formal_release/removed_run_ids。控制调用方仅绑定原任务身份、原候选和产品公开回执，更新现有持久发布目标；产品验真算法不再随调用方程序编译。相关正常、失败、错资产/正文/来源、重定向隔离、独立记录刷新和恢复用例源码归本仓flow.test.mjs。
+
+资源工具取消、超时、输出超限和异常收尾均等待主进程与整个后代组退出；无法确认退出时保留工作根和候选，禁止删除输入或改为可写。真实取消退出顺序用例仅写入resources.test.mjs，尚未执行。
+
+
+### 发布实现范围
+
+本轮新增产品发布实现已撤销，发布功能由后续逐个产品重建。现有操作入口与界面保留，当前不提供已删除实现的执行保证；Build、CI、Release和Start继续按各自现有入口运行。
+
+
+### 产品独立资源与唯一依赖供给
+
+本产品的scripts/resources.mjs拥有资源解析、来源与摘要验证、缺件取得、可写视图和失败条件。PRODUCT_DEPENDENCY_ROOT是可选只读供给；没有供给时使用源码外的本产品原件存储，产品需求仍只由当前源码、声明和锁决定。依赖索引读取仅接受schema_version=2及packages、git_sources、pods，不恢复旧目录或整锁快照。
+
+Maven的具体JAR、AAR、POM、module及分类器文件统一由packages的group:artifact、version、准确上游URL、SHA256和SRI定位objects中的原件。产品在本轮work/dependencies/maven按上游分区复制独占文件；不复制Gradle二进制元数据、锁和下载状态。产品生成本轮GRADLE_USER_HOME/init.d初始化脚本，只在自身已声明的同源仓库之前加入本轮原件视图，缺件仍按产品原仓库解析，明确离线则失败。Gradle解析、工程状态和后续编译都属于同一产品任务。
+
+Pod由pods中的name、version、checksum匹配当前Podfile.lock；spec保存官方CDN地址和原件摘要，source保存官方podspec来源，files保存发布树相对路径、文件内容摘要与权限或安全内部链接。只物化本产品所需的单个发布坐标；其它Pod、整锁、平台或宿主变化不要求复制全树。产品仍按CocoaPods官方规范回验SPEC CHECKSUMS，再验证本产品预锁定Git提交或HTTP发行摘要与源码回执。可写缓存和工具VERSION仅在本轮work产生，不能写回共享原件。
+
+错来源、摘要、重复同源内容、生成状态、硬链接、内部链接越界或循环、取消及任务副本漂移均据实失败。独立与控制台调用使用同一实现；控制台只提供可选原件并跟踪原有任务，UI、功能、按钮、平台与操作顺序保持。用例源码已同步，执行留待整项实现结束后的统一测试。
+
+
+### 独立入口回归验真边界
+
+资源回归使用自带固定提交、源码字节和spec的合成Pod，不借用产品真实Pod清单提供测试输入；无真实Pod需求的平台也验证来源、摘要、链接、循环、取消和物化失败。测试现场仍位于本产品target的准确平台，不写源码或其它产品目录。资源声明与生产依赖坐标不因测试夹具改变。
+
+资源取消对同一真实进程组每轮只发送一次信号；组不存在或Windows时才发送给主进程。仍等待主进程和后代实际退出，8秒未退出才强杀，12秒仍未确认则保留现场并失败；取消不能成为成功。
