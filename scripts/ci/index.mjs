@@ -1,9 +1,10 @@
 #!/usr/bin/env node
+import {claimFixedWork,releaseFixedWork,fixedWork,trackFixedProcess} from '../target.mjs';
 // CI_BUILD: incremental
 
 // 本文件是 citizenweb.web.ci 的完整动作入口；单平台目录不重复包装 web。
 // 所需实现内嵌于本文件，运行时不得导入其它产品或动作脚本。
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { temporaryRoot } from '../build.mjs';
 const tmpdir=()=>temporaryRoot('web','ci');
 import { dirname, join, resolve } from 'node:path';
@@ -17,7 +18,9 @@ if (!command || !Object.hasOwn(implementations, command)) {
   console.error(`未登记动作子命令：${command || '(empty)'}；允许值：${Object.keys(implementations).join(', ')}`);
   process.exit(2);
 }
-const temporaryDirectory = mkdtempSync(join(tmpdir(), 'citizenweb-action-'));
+const actionSession=claimFixedWork('build',{retain:process.env.GITHUB_ACTIONS==='true'});
+const temporaryDirectory=join(actionSession.owner.work,'action');
+mkdirSync(temporaryDirectory,{recursive:true});
 const shellCommand = command === 'linux-deps' || command === 'guardrails';
 const implementationPath = join(temporaryDirectory, shellCommand ? 'implementation.sh' : 'implementation.mjs');
 try {
@@ -30,5 +33,5 @@ try {
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 } finally {
-  rmSync(temporaryDirectory, { recursive: true, force: true });
+  rmSync(temporaryDirectory, { recursive: true, force: true });releaseFixedWork(actionSession);
 }
