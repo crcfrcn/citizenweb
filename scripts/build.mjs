@@ -21,9 +21,11 @@ export function productTarget(platform) {
  platformContract(platform);
  return join(root,'target');
 }
-export function temporaryRoot(platform=Object.keys(contract.platforms)[0],scope='test') {
+export function temporaryRoot(platform=Object.keys(contract.platforms)[0],scope='test',suppliedInput) {
  if(!['test','tmp','build','ci','release','publish'].includes(scope))fail('临时目录职责无效');
- platformContract(platform);return checkFixedWork(fixedWork(scope==='test'?'test':'build'),{create:true});
+ platformContract(platform);const expected=fixedWork(scope==='test'?'test':'build');
+ if(suppliedInput!=null&&suppliedInput!==expected)fail('临时工作根必须是本产品固定目录');
+ return checkFixedWork(expected,{create:true});
 }
 // 测试继承当前平台现场；独立执行没有任务身份时才选产品首个平台。
 export const testRoot=platform=>{
