@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import Module, { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import ts from 'typescript';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 
@@ -10,7 +15,6 @@ const appSource = readFileSync(join(projectPath, 'src/App.tsx'), 'utf8');
 const privacySource = readFileSync(join(projectPath, 'src/pages/Privacy.tsx'), 'utf8');
 const supportSource = readFileSync(join(projectPath, 'src/pages/Support.tsx'), 'utf8');
 const termsSource = readFileSync(join(projectPath, 'src/pages/Terms.tsx'), 'utf8');
-const viteSource = readFileSync(join(projectPath, 'scripts/vite.config.ts'), 'utf8');
 
 test('公民链四端下载固定走后端白名单代理且保持公开平台名', () => {
   assert.match(downloadButtonSource, /href=\{`\/api\$\{option\.downloadPath\}`\}/);
@@ -41,10 +45,33 @@ test('官网问题渠道和App Store前置页面保持完整', () => {
   assert.match(termsSource, /链上已经最终确认的公开记录不能由运营方单方面篡改或删除/);
 });
 
-test('Vite默认把正式构建输出写入CitizenWeb源码外临时目录', () => {
-  assert.match(viteSource, /process\.env\.CITIZENWEB_DIST \|\| join\(tmpdir\(\), 'citizenweb', 'dist'\)/u);
-  assert.doesNotMatch(viteSource, /new URL\('\.\.\/dist'/u);
-  assert.match(viteSource, /command === 'serve' \? developmentTLS\(\) : undefined/u);
+// 实际调用Vite配置工厂，避免旧路径文本断言与真实输出边界脱节。
+test('Vite构建输出只接受本产品target，构建不读取服务证书',async()=>{
+ const previous=process.env.CITIZENWEB_DIST;
+ try{
+  const factory=(await import(pathToFileURL(join(projectPath,'scripts/vite.config.ts')).href)).default;
+  delete process.env.CITIZENWEB_DIST;const options=factory({command:'build',mode:'production'});
+  assert.equal(options.build.outDir,join(projectPath,'target/build/dist'));
+  assert.equal(options.server.https,undefined);
+  process.env.CITIZENWEB_DIST=join(projectPath,'target/web/test/dist');assert.equal(factory({command:'build',mode:'production'}).build.outDir,process.env.CITIZENWEB_DIST);
+  for(const invalid of [projectPath,join(projectPath,'dist'),join(projectPath,'target'),'relative/dist']){process.env.CITIZENWEB_DIST=invalid;assert.throws(()=>factory({command:'build',mode:'production'}),/target/u);}
+ }finally{if(previous===undefined)delete process.env.CITIZENWEB_DIST;else process.env.CITIZENWEB_DIST=previous;}
+});
+
+// 使用原锁TypeScript与React真正渲染现有组件；不复制页面逻辑或伪造组件结果。
+test('法律和支持页面实际渲染正文及安全问题入口',()=>{
+ const previous=Module._extensions['.tsx'];
+ Module._extensions['.tsx']=(module,file)=>{
+  assert.ok(file.startsWith(join(projectPath,'src')+'/'));assert.equal(realpathSync(file),file);
+  const output=ts.transpileModule(readFileSync(file,'utf8'),{fileName:file,compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
+  module._compile(output,file);
+ };
+ try{
+  const require=createRequire(import.meta.url),render=name=>renderToStaticMarkup(React.createElement(require(join(projectPath,'src/pages',name+'.tsx')).default));
+  assert.match(render('Privacy'),/公民钱包是离线冷钱包/u);assert.match(render('Terms'),/链上已经最终确认的公开记录/u);
+  const support=render('Support');assert.match(support,/禁止附带助记词、私钥、密码、验证码/u);
+  assert.match(support,/href="https:\/\/github\.com\/crcfrcn\/citizenweb\/issues"/u);assert.match(support,/rel="[^"]*noreferrer/u);
+ }finally{if(previous===undefined)delete Module._extensions['.tsx'];else Module._extensions['.tsx']=previous;}
 });
 
 test('白皮书中英文使用同一MLS设备身份与协议内部密钥', () => {
