@@ -1,5 +1,5 @@
 import { fileURLToPath, URL } from 'node:url'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { createSecureContext } from 'node:tls'
 import { defineConfig } from 'vite'
@@ -7,8 +7,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 // 本配置固定CitizenWeb产品根、前端插件、自有target构建输出和开发服务器读取边界。
-const productRoot = fileURLToPath(new URL('..', import.meta.url))
-const workspaceRoot = fileURLToPath(new URL('../..', import.meta.url))
+const productRoot = fileURLToPath(new URL('../', import.meta.url))
 
 // 中文注释：开发/预览必须使用调用方提供的可信 TLS 材料；构建静态文件无需服务证书。
 export function developmentTLS() {
@@ -24,14 +23,14 @@ export function developmentTLS() {
 
 export default defineConfig(({ command }) => {
   const https = command === 'serve' ? developmentTLS() : undefined
-  const target = join(productRoot, 'target')
+  const target = join(process.env.PRODUCT_BUILD_ROOT || productRoot, 'target')
   const outDir = process.env.CITIZENWEB_DIST || join(target, 'build', 'dist')
   const difference = relative(target, outDir)
   if (!isAbsolute(outDir) || resolve(outDir) !== outDir || difference === '' || isAbsolute(difference) || difference === '..' || difference.startsWith('..' + sep)) throw new Error('CitizenWeb输出必须归本产品target')
   return {
     root: productRoot,
     plugins: [react(), tailwindcss()],
-    cacheDir: join(productRoot, 'target', 'tmp', 'vite'),
+    cacheDir: join(dirname(outDir), 'vite-cache'),
     build: {
       outDir,
     },
@@ -39,7 +38,7 @@ export default defineConfig(({ command }) => {
     server: {
       https,
       fs: {
-        allow: [workspaceRoot],
+        allow: [productRoot],
       },
     },
   }

@@ -7,11 +7,8 @@
     "node": "25.2.1"
   },
   "scripts": {
-    "dev": "vite --config scripts/vite.config.ts",
-    "build": "tsc -b scripts/tsconfig.json && vite build --config scripts/vite.config.ts",
-    "lint": "eslint --config scripts/eslint.config.js .",
-    "test": "node --test scripts/release/check/execute.mjs",
-    "preview": "vite preview --config scripts/vite.config.ts"
+    "dev": "node scripts/build.mjs dev",
+    "test": "node scripts/build.mjs test web"
   },
   "dependencies": {
     "dompurify": "3.4.13",

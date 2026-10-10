@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "repository": "citizenweb",
+  "workflows": [
+    "release-web.yml"
+  ],
+  "node_tests": [
+    "scripts/build.mjs",
+    "scripts/publish.mjs",
+    ".github/workflows/release-web.mjs"
+  ],
+  "checks": [
+    "repository-contracts",
+    "flow-isolation",
+    "syntax"
+  ],
+  "platform_forbidden_values": [
+    "macOS ARM64",
+    "macos-arm64",
+    "macos_arm64"
+  ],
+  "github_repository": "crcfrcn/citizenweb",
+  "functions": [
+    {
+      "function": "scripts/build",
+      "path": "scripts/build.mjs",
+      "runner": "node",
+      "target": "node"
+    },
+    {
+      "function": "scripts/publish",
+      "path": "scripts/publish.mjs",
+      "runner": "node",
+      "target": "node"
+    },
+    {
+      "function": ".github/workflows/release-web",
+      "path": ".github/workflows/release-web.mjs",
+      "runner": "node",
+      "target": "node"
+    }
+  ]
+}
