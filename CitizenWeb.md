@@ -56,7 +56,7 @@ ESLint、Vite 与两份 TypeScript 分环境配置位于本仓 `config/`，由 B
 
 该模块只负责公开官网页面、白皮书展示、公民宪法读链展示和 CitizenApp 会员订阅发起页，不承载 CitizenChain、链上中国、CitizenApp 或 CitizenWallet 的信任根逻辑。
 
-白皮书唯一真源位于 `citizenweb/src/whitepaper.md`，官网白皮书页通过 Vite raw import 读取该文件；白皮书图片资源继续通过官网构建流程打包展示。
+白皮书唯一真源位于 `citizenweb/src/whitepaper.md`，官网白皮书页通过 Vite raw import 读取该文件；白皮书图片资源继续通过官网构建流程打包展示。同一次官网构建另生成静态`/whitepaper/content.json`，只含正文Markdown，正文引用的官网图片以数据URI内嵌。公民链节点打开白皮书时固定从`https://www.crcfrcn.com/whitepaper/content.json`读取该文件，在自己的既有目录和正文组件渲染；官网部署生效后节点才可在线读取，节点离线时不能显示白皮书。
 
 公民宪法唯一真源在**链上** `LegislationYuan.LawVersions[0][effective_version].chapters`（创世值 = runtime 内置 `constitution.scale`）。官网不打包宪法正文，改由 Cloudflare Worker 读链下发（见 3.3），与 CitizenApp / 区块链节点 / 链上中国四端同源，修宪后自动更新。
 
@@ -220,9 +220,7 @@ CitizenApp 或后端 workflow，不读取 Cloudflare 生产令牌，也不创建
 
 中英文白皮书统一声明：钱包之外，公民客户端使用 TataChatSDK 持久化的同一本机 MLS Ed25519 身份及 MLS 协议内部状态。初次登记由当前 CID 绑定钱包签署 `0x1C` 域的同一32字节 MLS 公钥；普通请求使用该 MLS 身份证明，不增加独立设备认证钥或应用用途钥。私人本地记录由操作系统保护，MLS 网络协议仍负责加密与成员验证。新成员通过有效 KeyPackage、Welcome、Commit 加入；丢失全部 MLS 状态不能用钱包私钥恢复旧组。
 
-链节点内置白皮书必须从已保存、已登记验真的官网固定提交正式生成。源码检查应同时覆盖两种语言，禁止把尚未更新的内置资料当作当前合同。
-
-本轮源码固定提交为 `b9276f147e4b7fc1f14ec1905e8b7225d0d6fbea`；链节点内置资料已从该已保存、已登记的不可变Git原件正式生成。源码测试仍等待整批修改完成后统一运行。
+链节点不再内置白皮书副本；官网静态正文与官网页面由同一次源码构建生成，节点运行时读取最新已部署内容。白皮书源码检查继续覆盖中英文内容。
 
 
 ### 产品独立资源与编译入口

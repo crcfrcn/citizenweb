@@ -1339,6 +1339,15 @@ const fixture=work=>{
  tools:Object.fromEntries(contract.platforms[platform].tools.map(tool=>[tool.id,{version:tool.version,path:process.execPath}])),
  dependencies:{own},archives:{},environment:{}};
 };
+test('官网白皮书静态正文保留图片且缺少原件时失败',async()=>{
+ const {whitepaperContent}=await import('../config/vite.config.ts');
+ const source='# 白皮书\n<img src="./assets/diagram.png">';
+ const output=JSON.parse(whitepaperContent(source,name=>{
+  assert.equal(name,'diagram.png');return Buffer.from('image bytes');
+ }));
+ assert.equal(output.markdown,'# 白皮书\n<img src="data:image/png;base64,aW1hZ2UgYnl0ZXM=">');
+ assert.throws(()=>whitepaperContent(source,()=>{throw Error('图片原件缺失');}),/图片原件缺失/);
+});
 test('Web只从本仓npm原锁只读提出准确需求',async()=>{
  const work=sandbox();try{const before=readdirSync(work),result=await requirements('web',work);
   assert.equal(result.product_id,'citizenweb');assert.equal(result.schema,1);assert.equal(result.platform,'web');
