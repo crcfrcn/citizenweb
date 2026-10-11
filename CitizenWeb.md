@@ -244,6 +244,8 @@ CitizenApp 或后端 workflow，不读取 Cloudflare 生产令牌，也不创建
 
 `scripts/publish.mjs` 只通过公开 HTTPS 读取唯一成功 Run 对应的正式资产，并验真归档成员、版本和摘要。它不导入 Build 或 Workflow，不创建 Release，也不部署 Pages。Pages 上传与切流尚未接通时按实际状态失败。
 
+本仓 `scripts/config.mjs` 是控制台只读配置需求接口，当前实际流程不消费部署令牌、Cloudflare账户/Zone或媒体清理令牌，因此明确返回空配置。Pages部署能力将来由本仓真实接口实现并声明后，控制台才显示相应需求；公民服务端的广场媒体配置不归官网登记。
+
 ### 只读塔塔门禁与验收
 
 `.github/tatagate/tatagate.mjs` 只读核对本仓主检出、目录闭集、流程边界、登记文件和 Node 语法；它不准备资源、不运行 Build 或产品测试。当前变更仅通过语法和差异空白检查，完整产品回归、真实 GitHub Run 和 Pages 部署尚未验收。
