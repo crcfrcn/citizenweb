@@ -2,8 +2,12 @@
 // 官网发布只读核验已完成自动化的公开正式资产；Tag、Release及云部署均不属于此入口。
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
+import {spawn} from 'node:child_process';
+import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {dirname,join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 
-const repository='crcfrcn/citizenweb',workflow='.github/workflows/release-web.yml';
+const repository='crcfrcn/citizenweb',workflow='.github/workflows/web.yml';
 const names=['citizenweb-release.tgz','release-manifest.json','SHA256SUMS'];
 const sha=value=>typeof value==='string'&&/^[a-f0-9]{64}$/u.test(value);
 const positive=value=>Number.isSafeInteger(value)&&value>0;
@@ -42,7 +46,7 @@ function archiveFiles(bytes){
  if(!ended||tar.length%512)fail('归档终止标记缺失');return files;
 }
 
-function inspectPackage(bytes,manifestBytes,sumsBytes,version,sourceSHA){
+export function inspectPackage(bytes,manifestBytes,sumsBytes,version,sourceSHA){
  const files=archiveFiles(bytes);
  if(!files.get('release-manifest.json')?.equals(manifestBytes)||!files.get('SHA256SUMS')?.equals(sumsBytes))fail('正式资产与归档内清单不一致');
  let manifest,marker,source,lock;
@@ -68,7 +72,7 @@ function inspectPackage(bytes,manifestBytes,sumsBytes,version,sourceSHA){
  return {manifest,files:files.size};
 }
 
-async function inspectCandidate({run,release,readTag,readAsset}){
+async function inspectCandidate({run,release,readTag,readAsset,includeContents=false}){
  if(run?.path!==workflow||run.repository?.full_name!==repository||run.head_branch!=='main'||run.event!=='workflow_dispatch'
   ||run.status!=='completed'||run.conclusion!=='success'||!positive(run.id)||!positive(run.run_attempt)||!/^[a-f0-9]{40}$/u.test(run.head_sha||''))fail('成功自动化身份无效');
  const match=/^citizenweb-web-v(\d+\.\d+\.\d+)-r([1-9]\d*)-a([1-9]\d*)$/u.exec(release?.tag_name||'');
@@ -76,7 +80,7 @@ async function inspectCandidate({run,release,readTag,readAsset}){
    ||release.target_commitish!==run.head_sha||!Array.isArray(release.assets)||release.assets.length!==names.length)fail('正式Release身份无效');
  const tag=await readTag(release.tag_name);
  if(tag?.ref!=='refs/tags/'+release.tag_name||tag.object?.type!=='commit'||tag.object.sha!==run.head_sha)fail('正式Tag源码不一致');
- const bytes=new Map(),proof=[];
+ const bytes=new Map(),assetProof=[];
  for(const name of names){
   const rows=release.assets.filter(asset=>asset?.name===name);if(rows.length!==1)fail('正式资产缺失或重复');
   const asset=rows[0];
@@ -87,23 +91,73 @@ async function inspectCandidate({run,release,readTag,readAsset}){
   if(!stream||typeof stream[Symbol.asyncIterator]!=='function')fail('正式资产读取通道无效');
   for await(const chunk of stream){if(!(chunk instanceof Uint8Array))fail('正式资产字节无效');total+=chunk.length;if(total>asset.size)fail('正式资产超限');chunks.push(Buffer.from(chunk));}
   const body=Buffer.concat(chunks);if(total!==asset.size||digest(body)!==asset.digest.slice(7))fail('正式资产回读不一致');
-  bytes.set(name,body);proof.push({name,asset_id:asset.id,bytes:total,sha256:digest(body)});
+  bytes.set(name,body);assetProof.push({name,asset_id:asset.id,bytes:total,sha256:digest(body)});
  }
  const product=inspectPackage(bytes.get(names[0]),bytes.get(names[1]),bytes.get(names[2]),match[1],run.head_sha);
- return {schema:1,product_id:'citizenweb',delivery_channel:'web',version:match[1],source_sha:run.head_sha,
-  run_id:run.id,run_attempt:run.run_attempt,release_id:release.id,tag:release.tag_name,archive_files:product.files,assets:proof};
+ const proof={schema:1,product_id:'citizenweb',delivery_channel:'web',version:match[1],source_sha:run.head_sha,
+  run_id:run.id,run_attempt:run.run_attempt,release_id:release.id,tag:release.tag_name,archive_files:product.files,assets:assetProof};
+ return includeContents?{proof,contents:archiveFiles(bytes.get(names[0]))}:proof;
 }
 
-export async function preparePublication({request=publicRequest}={}){
+async function selectedPublication(request,includeContents=false){
  const runs=await pages('actions/runs','workflow_runs',request),releases=await pages('releases',null,request);
  const success=runs.filter(run=>run?.path===workflow&&run.repository?.full_name===repository&&run.head_branch==='main'
   &&run.event==='workflow_dispatch'&&run.status==='completed'&&run.conclusion==='success');
- if(success.length!==1)fail('缺少唯一保留成功自动化');
+ if(!success.length)fail('缺少成功自动化');
+ success.sort((a,b)=>b.run_number-a.run_number||b.run_attempt-a.run_attempt||b.id-a.id);
  const run=success[0],suffix='-r'+run.id+'-a'+run.run_attempt;
  const release=releases.filter(value=>value?.tag_name?.startsWith('citizenweb-web-v')&&value.tag_name.endsWith(suffix));
  if(release.length!==1)fail('成功自动化缺少唯一Release');
  return inspectCandidate({run,release:release[0],readTag:tag=>request('git/ref/tags/'+encodeURIComponent(tag)),
-  readAsset:async asset=>(await request(asset.url,{raw:true}))?.body});
+  readAsset:async asset=>(await request(asset.url,{raw:true}))?.body,includeContents});
+}
+export async function preparePublication({request=publicRequest}={}){return selectedPublication(request);}
+
+// 正式发布重新读取并验真同一个 Release；只在本轮独占目录物化经过清单约束的成员。
+async function runTool(command,args,cwd,environment,signal){
+ return new Promise((resolve,reject)=>{
+  const child=spawn(command,args,{cwd,env:environment,signal,stdio:['ignore','pipe','pipe']});let tail='',failure;
+  for(const stream of [child.stdout,child.stderr])stream.on('data',chunk=>{tail=(tail+chunk.toString('utf8')).slice(-2048);});
+  child.on('error',error=>{failure=error;});
+  child.on('close',code=>code===0?resolve():reject(Error('官网发布工具失败：'+(failure?.code??code)+' '+tail.replace(/[\x00-\x1f\x7f]/gu,' ').slice(-512))));
+ });
+}
+export function publishTools(){return [{id:'node',version:'25.2.1'}];}
+export async function publishPages({proof,runID,nodePath,previousID,security,signal,beforeDeploy,request=publicRequest,install=runTool}={}){
+ if(proof?.product_id!=='citizenweb'||proof.delivery_channel!=='web'||!positive(proof.run_id)
+  ||typeof runID!=='string'||!/^[1-9][0-9]{8}$/u.test(runID)||typeof security!=='function'
+  ||typeof nodePath!=='string'||!nodePath.startsWith('/')||typeof previousID!=='string'
+  ||!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu.test(previousID))fail('Pages发布任务身份无效');
+ const current=await selectedPublication(request,true);
+ if(stable(current.proof)!==stable(proof))fail('正式产物在授权后发生变化');
+ const base=fileURLToPath(new URL('../target/publish/web/',import.meta.url));
+ await mkdir(base,{recursive:true,mode:0o700});
+ const work=await mkdtemp(join(base,runID+'-'));
+ try{
+  for(const [name,bytes] of current.contents){
+   const path=join(work,name);await mkdir(dirname(path),{recursive:true,mode:0o700});
+   await writeFile(path,bytes,{flag:'wx',mode:0o600});
+  }
+  const source=JSON.parse(current.contents.get('package.json'));
+  const lock=JSON.parse(current.contents.get('package-lock.json'));
+  if(source.devDependencies?.wrangler!=='4.121.0'||lock.packages?.['node_modules/wrangler']?.version!=='4.121.0')fail('正式包Wrangler锁无效');
+  const environment={PATH:[dirname(nodePath),'/usr/bin','/bin'].join(':'),HOME:work,
+   npm_config_cache:join(work,'npm-cache'),CI:'1',WRANGLER_SEND_METRICS:'false'};
+  const npmCLI=join(dirname(nodePath),'../lib/node_modules/npm/bin/npm-cli.js');
+  await install(nodePath,[npmCLI,'ci','--ignore-scripts','--no-audit','--no-fund'],work,environment,signal);
+  signal?.throwIfAborted();beforeDeploy?.();
+  const payload={schema:1,product_id:'citizenweb',platform:'web',run_id:runID,
+   release_tag:proof.tag,source_sha:proof.source_sha,version:proof.version,
+   archive_sha256:proof.assets.find(asset=>asset.name===names[0])?.sha256,
+   previous_deployment_id:previousID,work,node_path:nodePath};
+  const answer=await security('cloudflare.pages.execute',{file:'citizenweb.mjs',
+   payload_base64:Buffer.from(JSON.stringify(payload)).toString('base64')});
+  if(answer?.ok!==true||typeof answer.payload_base64!=='string')fail('Pages发布安全执行器未确认');
+  const result=JSON.parse(Buffer.from(answer.payload_base64,'base64').toString('utf8'));
+  if(result?.product_id!=='citizenweb'||result?.platform!=='web'||result?.release_tag!==proof.tag
+   ||result?.source_sha!==proof.source_sha||result?.project!=='citizenweb'||result?.deployed!==true)fail('Pages部署回执无效');
+  return result;
+ }finally{await rm(work,{recursive:true,force:true});}
 }
 
 async function publicRequest(path,{raw=false}={}){
@@ -125,7 +179,9 @@ if(testing){
  const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict'),{gzipSync}=await import('node:zlib'),{Readable}=await import('node:stream');
  function fixture(){
   const source='a'.repeat(40),version='1.0.0',tag='citizenweb-web-v1.0.0-r42-a1';
-  const fileBytes=new Map([['package.json',Buffer.from(JSON.stringify({version}))],['package-lock.json',Buffer.from(JSON.stringify({version,packages:{'':{version}}}))],['dist/index.html',Buffer.from('<html>synthetic</html>')],['dist/app.js',Buffer.from('synthetic')]]);
+  const fileBytes=new Map([['package.json',Buffer.from(JSON.stringify({version,devDependencies:{wrangler:'4.121.0'}}))],
+   ['package-lock.json',Buffer.from(JSON.stringify({version,packages:{'':{version},'node_modules/wrangler':{version:'4.121.0'}}}))],
+   ['dist/index.html',Buffer.from('<html>synthetic</html>')],['dist/app.js',Buffer.from('synthetic')]]);
   const assets=[...fileBytes].filter(([path])=>path.startsWith('dist/')).map(([path,bytes])=>({path,sha256:digest(bytes)})).sort((a,b)=>a.path.localeCompare(b.path));
   const assets_sha256=digest(Buffer.from(stable(assets)));
   fileBytes.set('dist/citizenweb-release.json',Buffer.from(JSON.stringify({product_id:'citizenweb',delivery_channel:'web',software_version:version,git_commit_sha:source,assets_sha256})));
@@ -156,5 +212,33 @@ if(testing){
  test('只公开只读准备入口，错误参数不能产生正式动作',()=>{
   assert.equal(names.length,3);assert.equal(exact({product_id:'citizenweb',delivery_channel:'web'},['product_id','delivery_channel']),true);
   assert.equal(exact({product_id:'citizenweb',unknown:true},['product_id']),false);
+ });
+ test('Pages发布只消费同一正式候选且失败不触发安全部署',async()=>{
+  const source=fixture(),proof=await preparePublication({request:source.request});let installs=0,calls=0;
+  const security=async(operation,payload)=>{calls++;assert.equal(operation,'cloudflare.pages.execute');
+   const request=JSON.parse(Buffer.from(payload.payload_base64,'base64'));
+   assert.equal(request.release_tag,proof.tag);assert.equal(request.archive_sha256,proof.assets[0].sha256);
+   assert.equal(request.previous_deployment_id,'00000000-0000-4000-8000-000000000001');
+   return {ok:true,payload_base64:Buffer.from(JSON.stringify({product_id:'citizenweb',platform:'web',
+    release_tag:proof.tag,source_sha:proof.source_sha,project:'citizenweb',deployed:true})).toString('base64')};};
+  const options={proof,runID:'123456789',nodePath:process.execPath,
+   previousID:'00000000-0000-4000-8000-000000000001',request:source.request,security,
+   install:async(_node,_args,work)=>{installs++;assert.ok(work.includes('/target/publish/web/'));}};
+  const result=await publishPages(options);assert.equal(result.deployed,true);assert.equal(installs,1);assert.equal(calls,1);
+  await assert.rejects(publishPages({...options,proof:{...proof,source_sha:'b'.repeat(40)}}),/授权后发生变化/u);
+  assert.equal(calls,1);
+  await assert.rejects(publishPages({...options,previousID:'not-a-deployment'}),/任务身份无效/u);
+  assert.equal(calls,1);
+  await assert.rejects(publishPages({...options,install:async()=>{throw Error('锁定依赖缺失');}}),/锁定依赖缺失/u);
+  assert.equal(calls,1);
+ });
+ test('官网发布配置只声明账户、部署令牌与本产品冷签信任锚',async()=>{
+  const {describeConfiguration}=await import('./config.mjs');
+  const rows=describeConfiguration().configuration.items;
+  assert.deepEqual(rows.map(row=>[row.environment,row.name,row.accessLevel,row.kind]),[
+   ['production','CF_ACCOUNT_ID','public','deployment'],
+   ['cloudflare','PAGES_DEPLOY','protected','operation'],
+   ['citizenweb-approval','COLD_SIGNER_PUBLIC_KEY','protected','authorization']]);
+  assert.equal(rows.some(row=>Object.hasOwn(row,'value')),false);
  });
 }

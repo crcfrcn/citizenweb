@@ -7,7 +7,7 @@
 本产品编译任务使用本仓 `target/build/<平台>` 独立临时目录，平台键为 `web`。不同平台同时领取并执行；同平台已有活跃任务时立即拒绝再次领取。资源准备、工程副本、缓存和编译输出只写本平台现场；确认进程及后代退出、结果被调用方消费后，删除整个平台目录。`target/build` 仅是父目录，`target/test` 仍用于独立测试。独立执行和控制台调度调用同一本仓编译入口与清理接口。
 
 
-公民官网的本机 Build 负责资源、固定现场、HTTPS 开发启动和静态编译；正式组包归 GitHub 自动化；GitHub 自动化负责版本、Run、Tag/Release 与正式资产上传；Publish 只读核验自动化产物。Pages 上传及切流尚未实现。
+公民官网的本机 Build 负责资源、固定现场、HTTPS 开发启动和静态编译；正式组包归 GitHub 自动化；GitHub 自动化负责版本、Run、Tag/Release 与正式资产上传；Publish 在独立验真最新成功自动化和正式资产后，经控制台本次 Touch ID、QR 冷签与 Keychain 部署令牌上传既有 Cloudflare Pages 项目 `citizenweb`，并回读生产部署。
 
 ## 工具与依赖的声明和供给职责（2026-10-08）
 
@@ -80,11 +80,9 @@ ESLint、Vite 与两份 TypeScript 分环境配置位于本仓 `config/`，由 B
 node scripts/build.mjs describe
 ```
 
-完整编译使用 `scripts/build.mjs execute web --work <本仓绝对路径>/target/build/web`，正式候选由 `.github/workflows/release-web.mjs` 独立组包；二者都由 Build 准备当前任务视图并执行 ESLint、TypeScript 与 Vite，不以 `describe` 的只读声明代替编译结果。
+完整编译使用 `scripts/build.mjs execute web --work <本仓绝对路径>/target/build/web`，正式候选由 `.github/workflows/web.yml` 在同一Runner组包；二者都由 Build 准备当前任务视图并执行 ESLint、TypeScript 与 Vite，不以 `describe` 的只读声明代替编译结果。
 
-正式候选组包由 Workflow 独立执行原锁安装、ESLint、TypeScript 与 Vite；离线完整编译和门禁验收执行原锁安装、ESLint、TypeScript 与 Vite，产品测试另由本仓公开测试入口执行。通过后由
-本仓公开入口生成确定性归档。它不复用
-CitizenApp 或后端 workflow，不读取 Cloudflare 生产令牌，也不创建 Pages Deployment。
+正式候选由 Workflow 调用本仓 Build 按原锁执行 ESLint、TypeScript 与 Vite；随后在同一 Runner 组装确定性归档，并交由本仓 Publish 校验接口回读。产品测试另由本仓公开测试入口执行。它不复用 CitizenApp 或后端 workflow，不读取 Cloudflare 生产令牌，也不创建 Pages Deployment。
 源码初始版本来自 `citizenweb/package.json`；GitHub 本目标自动化按成功历史与运行序号计算正式版本。Build 仅在本轮工程副本写入自动化交付的版本，不改源码清单。
 
 白皮书内容、首页发行量、链上中国卖点、技术页和生态页更新后，必须至少访问首页、技术页、生态页、代币经济页和白皮书页确认页面可正常渲染。
@@ -240,13 +238,13 @@ CitizenApp 或后端 workflow，不读取 Cloudflare 生产令牌，也不创建
 
 ### GitHub 自动化
 
-`.github/workflows/release-web.yml` 与同名 MJS 独立从已保存的本仓源码建立 Runner 临时工程，按原锁安装依赖，完成 ESLint、TypeScript、Vite 检查和正式 Web 归档及三件资产回读。版本、Run、Tag、Release、上传和同目标历史清理由该 Workflow 独占；不调用本机 Build。正式资产为 `citizenweb-release.tgz`、`release-manifest.json`、`SHA256SUMS`。
+`.github/workflows/web.yml` 由 GitHub main 的手动派发启动，在 Xcode 27 ARM64 Runner 上调用本仓 `scripts/build.mjs` 完成静态编译。YAML 在本轮 Runner 临时目录组包，以 `scripts/publish.mjs` 的 `inspectPackage` 核验三件正式资产，创建并回读本平台 Tag/Release。失败时只撤销本次创建的 Release 与 Tag。正式资产为 `citizenweb-release.tgz`、`release-manifest.json`、`SHA256SUMS`。不自动部署 Pages。
 
 ### Publish
 
-`scripts/publish.mjs` 只通过公开 HTTPS 读取唯一成功 Run 对应的正式资产，并验真归档成员、版本和摘要。它不导入 Build 或 Workflow，不创建 Release，也不部署 Pages。Pages 上传与切流尚未接通时按实际状态失败。
+`scripts/publish.mjs` 是本产品唯一正式渠道发布入口。准备阶段只通过公开 HTTPS 读取最新成功 Run 对应的正式资产，验真归档成员、版本和摘要；最终确认后再次读取并比对同一候选，只在本轮独占目录物化经清单约束的静态文件和原锁 Wrangler，调用控制台原生安全接口向既有 Pages 项目 `citizenweb` 的 `main` 生产环境上传，回读部署身份。它不导入 Build 或 Workflow，不创建 Release。Cloudflare Pages 官方 Direct Upload 要求 `CLOUDFLARE_ACCOUNT_ID` 与具备 Pages Edit 权限的 API Token；控制台准备冷签时读取真实的上一次 Pages 生产部署 ID，让离线钱包按既有 `previous_deployment_id` 字段准确展示；最终上传前再次回读同一 ID，变化即要求重签。控制台只在 Touch ID 与本次 QR 冷签后向锁定 Wrangler 的子进程交付令牌，不把值写进产品仓库或日志。[Cloudflare 官方说明](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/)
 
-本仓 `scripts/config.mjs` 是控制台只读配置需求接口，当前实际流程不消费部署令牌、Cloudflare账户/Zone或媒体清理令牌，因此明确返回空配置。Pages部署能力将来由本仓真实接口实现并声明后，控制台才显示相应需求；公民服务端的广场媒体配置不归官网登记。
+本仓 `scripts/config.mjs` 是控制台只读配置需求接口，只声明官网发布使用的公开 `CF_ACCOUNT_ID`、保密 `PAGES_DEPLOY` 与保密冷签信任公钥 `COLD_SIGNER_PUBLIC_KEY`，不保存配置值。公民服务端的广场媒体配置不归官网登记。Pages 发布要求既有项目的生产分支为 `main`、正式域名包含 `www.crcfrcn.com`，且 Git 集成的自动生产部署必须关闭，防止 main 推送绕过 Release；部署后由 Cloudflare API 回读准确项目、提交、环境及成功状态。[Cloudflare 部署接口](https://developers.cloudflare.com/api/resources/pages/subresources/projects/subresources/deployments/)
 
 ### 塔塔鹿鹿与验收
 
@@ -254,7 +252,7 @@ CitizenApp 或后端 workflow，不读取 Cloudflare 生产令牌，也不创建
 
 ### 目录闭集
 
-`scripts/` 仅保留 `build.mjs` 与 `publish.mjs`；产品根保留 `package.json`、`package-lock.json`、`tsconfig.json`，工具配置位于 `config/eslint.config.js`、`config/tsconfig.app.json`、`config/tsconfig.node.json`、`config/vite.config.ts`；`.github/` 仅保留 `workflows/release-web.{yml,mjs}` 与 `tatagate/tatagate.{json,mjs}`。`README.md` 只提供简介和许可入口，白皮书正文仍归 `src/whitepaper.md`。
+`scripts/` 仅保留 `build.mjs` 与 `publish.mjs`；产品根保留 `package.json`、`package-lock.json`、`tsconfig.json`，工具配置位于 `config/eslint.config.js`、`config/tsconfig.app.json`、`config/tsconfig.node.json`、`config/vite.config.ts`；`.github/` 仅保留 `workflows/web.yml` 与 `tatagate/tatagate.{json,mjs}`。`README.md` 只提供简介和许可入口，白皮书正文仍归 `src/whitepaper.md`。
 
 
 ## GitHub塔塔门禁与同类记录清理
@@ -265,4 +263,8 @@ CitizenApp 或后端 workflow，不读取 Cloudflare 生产令牌，也不创建
 
 门禁清理接口只对 URL 的路径部分拒绝越界，允许 created 查询中的时间范围分隔符；同文件回归直接执行正式 HTTP 参数校验，覆盖时间范围和越界拒绝。
 
-编译入口在同一次任务中先执行本仓 `scripts/build.mjs` 声明的适用代码回归，全部通过后才执行所选平台构建；测试失败、取消或测试文件在阶段间变化均禁止生成正式编译产物。测试清单与所需工具只由本仓 Build 接口声明，控制台不再提供独立测试按钮或从发布接口读取测试清单。
+编译入口在同一次任务中由本仓完整 Build 先取得资源回执、运行适用代码回归，全部通过后才执行所选平台正式编译；测试失败或取消均禁止生成正式编译产物。测试清单与所需工具只归本仓 Build，控制台仅调用完整入口并按本仓声明供给资源。
+
+## 产品自有编译前测试
+
+完整 Build 由本产品在首次资源回执后运行自己登记的 Node 回归，成功后才进入工程准备和正式编译。测试所需 Node 及其它资源按本仓平台声明验真：独立执行由本产品准备，控制台调度仅按本仓声明供给并调用完整 Build，不选择测试文件或限定测试工具。测试夹具的固定根映射到本仓 `target/test/sessions/<本轮随机会话>/`，子进程继承会话身份；退出时由本产品核对守卫和工具进程后仅清理该会话。正式 `target/build/<平台>` 的领取与收尾规则保持。合成阶段注入只在本仓测试上下文有效，正式完整 Build 必须先运行本仓测试。

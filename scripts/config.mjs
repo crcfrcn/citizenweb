@@ -6,7 +6,11 @@ export const manifest=Object.freeze({
     "id": "citizenweb",
     "kind": "web",
     "title": "官网配置",
-    "items": []
+    "items": [
+      {"environment":"production","name":"CF_ACCOUNT_ID","title":"Cloudflare Account ID","description":"公民官网 Pages 所属账户","revealable":true,"accessLevel":"public","kind":"deployment","format":"hex16"},
+      {"environment":"cloudflare","name":"PAGES_DEPLOY","title":"Pages 部署令牌","description":"仅用于公民官网正式 Pages 部署","revealable":false,"accessLevel":"protected","kind":"operation"},
+      {"environment":"citizenweb-approval","name":"COLD_SIGNER_PUBLIC_KEY","title":"发布冷签公钥","description":"仅用于公民官网正式发布批准验签","revealable":true,"accessLevel":"protected","kind":"authorization","format":"hex32"}
+    ]
   }
 });
 export function describeConfiguration(){return JSON.parse(JSON.stringify(manifest));}
