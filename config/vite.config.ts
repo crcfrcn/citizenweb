@@ -2,9 +2,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { createSecureContext } from 'node:tls'
-import { defineConfig, type Plugin } from 'vite'
-import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
+import type { Plugin } from 'vite'
 
 // 本配置固定CitizenWeb产品根、前端插件、自有target构建输出和开发服务器读取边界。
 const productRoot = fileURLToPath(new URL('../', import.meta.url))
@@ -45,13 +43,17 @@ export function developmentTLS() {
   return options
 }
 
-export default defineConfig(({ command }) => {
+export default async function config({ command }: { command: string }) {
+  // 纯白皮书函数可在依赖安装前测试；正式 Vite 配置只在编译时领取已锁插件。
+  const [{ defineConfig }, { default: react }, { default: tailwindcss }] = await Promise.all([
+    import('vite'), import('@vitejs/plugin-react'), import('@tailwindcss/vite'),
+  ])
   const https = command === 'serve' ? developmentTLS() : undefined
   const target = join(process.env.PRODUCT_BUILD_ROOT || productRoot, 'target')
   const outDir = process.env.CITIZENWEB_DIST || join(target, 'build', 'dist')
   const difference = relative(target, outDir)
   if (!isAbsolute(outDir) || resolve(outDir) !== outDir || difference === '' || isAbsolute(difference) || difference === '..' || difference.startsWith('..' + sep)) throw new Error('CitizenWeb输出必须归本产品target')
-  return {
+  return defineConfig({
     root: productRoot,
     plugins: [react(), tailwindcss(), whitepaperAsset],
     cacheDir: join(dirname(outDir), 'vite-cache'),
@@ -65,5 +67,5 @@ export default defineConfig(({ command }) => {
         allow: [productRoot],
       },
     },
-  }
-})
+  })
+}

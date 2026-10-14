@@ -227,6 +227,8 @@ node scripts/build.mjs describe
 
 公民官网 Web Build 只声明并取得锁定的 Node 25.2.1 发行件，以及 `package-lock.json` 指定的 npm 原件；Node 与 npm/Vite 是静态页面编译的完整工具闭包。产品先对 Node 官方归档做固定 SHA-256 校验、隔离解包和入口核验，再从锁中准备 npm 离线缓存，运行本仓测试、`npm ci --ignore-scripts --offline` 与 Vite 构建。锁中标记 `inBundle` 且没有独立 URL/SRI 的依赖仅在逐级确认其父包存在并有锁定 SRI 时由父包 tarball 承载，孤儿或未锁定父包失败。Git、POSIX、Bash、Grep、Sed 及其 Perl、Python、OpenSSL、Gettext、M4、Bison、Flex 原生源码构建不再属于 Web Build；GitHub 工作流与产品 Build 以同一 Node 只读接口核对固定 checkout 的独立 HEAD 与 GitHub Run SHA，不调用 Git CLI。正式 Release 三件资产、Pages 发布和独立工作现场规则不变。
 
+白皮书正文函数在依赖安装前保持可单独加载；Vite 与 React/Tailwind 插件只在实际调用构建配置时动态加载，因此“先测试、再编译”的测试阶段无需预装前端依赖。测试子进程显式继承本轮测试会话身份，互斥和强制终止回归均针对同一个固定现场，不碰正式 build 工作根。
+
 ### Publish
 
 `scripts/publish.mjs` 是本产品唯一正式渠道发布入口。准备阶段只通过公开 HTTPS 读取最新成功 Run 对应的正式资产，验真归档成员、版本和摘要；最终确认后再次读取并比对同一候选，只在本轮独占目录物化经清单约束的静态文件和原锁 Wrangler，调用控制台原生安全接口向既有 Pages 项目 `citizenweb` 的 `main` 生产环境上传，回读部署身份。它不导入 Build 或 Workflow，不创建 Release。Cloudflare Pages 官方 Direct Upload 要求 `CLOUDFLARE_ACCOUNT_ID` 与具备 Pages Edit 权限的 API Token；控制台准备冷签时读取真实的上一次 Pages 生产部署 ID，让离线钱包按既有 `previous_deployment_id` 字段准确展示；最终上传前再次回读同一 ID，变化即要求重签。控制台只在 Touch ID 与本次 QR 冷签后向锁定 Wrangler 的子进程交付令牌，不把值写进产品仓库或日志。[Cloudflare 官方说明](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/)

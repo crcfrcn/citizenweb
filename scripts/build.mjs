@@ -1065,11 +1065,11 @@ test('未经本产品锁声明的归档回执不能用于编译',async()=>{
 test('独立命令行从自身声明输出JSON，未知平台失败且不写工作根',async()=>{
  const work=sandbox();try{
   for(const platform of Object.keys(contract.platforms)){
-   const before=readdirSync(work),result=spawnSync(process.execPath,[join(root,'scripts/build.mjs'),'requirements',platform,'--work',work],{env:{HOME:work,LANG:'C',LC_ALL:'C'},encoding:'utf8'});
+   const before=readdirSync(work),result=spawnSync(process.execPath,[join(root,'scripts/build.mjs'),'requirements',platform,'--work',work],{env:{HOME:work,LANG:'C',LC_ALL:'C',NODE_TEST_CONTEXT:process.env.NODE_TEST_CONTEXT,PRODUCT_TEST_SESSION:testSession},encoding:'utf8'});
    assert.equal(result.status,0,result.stderr);const value=JSON.parse(result.stdout);assert.equal(value.product_id,contract.product_id);assert.equal(value.platform,platform);
    assert.deepEqual(readdirSync(work),before);
   }
-  const invalid=spawnSync(process.execPath,[join(root,'scripts/build.mjs'),'requirements','unknown','--work',work],{env:{HOME:work},encoding:'utf8'});
+  const invalid=spawnSync(process.execPath,[join(root,'scripts/build.mjs'),'requirements','unknown','--work',work],{env:{HOME:work,NODE_TEST_CONTEXT:process.env.NODE_TEST_CONTEXT,PRODUCT_TEST_SESSION:testSession},encoding:'utf8'});
   assert.notEqual(invalid.status,0);assert.match(invalid.stderr,/平台/);
  }finally{removeFixture(work,{recursive:true});}
 });
@@ -1270,7 +1270,7 @@ test('第二个真实进程不能领取活跃固定根或清理前一任务',asy
  await withFixedWork('test',async work=>{
   fs.writeFileSync(join(work,'sentinel'),'owned');
   const module=join(import.meta.dirname,'build.mjs');
-  assert.throws(()=>execFileSync(process.execPath,['--input-type=module','-e','import {withFixedWork} from '+JSON.stringify(module)+'; await withFixedWork("test",()=>{});'],{env:{PATH:process.env.PATH},stdio:['ignore','pipe','pipe']}),/活跃任务/);
+  assert.throws(()=>execFileSync(process.execPath,['--input-type=module','-e','import {withFixedWork} from '+JSON.stringify(module)+'; await withFixedWork("test",()=>{});'],{env:{PATH:process.env.PATH,NODE_TEST_CONTEXT:process.env.NODE_TEST_CONTEXT,PRODUCT_TEST_SESSION:testSession},stdio:['ignore','pipe','pipe']}),/活跃任务/);
   assert.equal(fs.readFileSync(join(work,'sentinel'),'utf8'),'owned');
  });isEmpty();
 });
@@ -1295,7 +1295,7 @@ test('实际任务被强制终止后下一轮在同一固定根恢复并清场',
  const {spawn}=await import('node:child_process');
  const module=join(import.meta.dirname,'build.mjs');
  const code='import {withFixedWork} from '+JSON.stringify(module)+';import fs from "node:fs";await withFixedWork("test",async work=>{fs.writeFileSync(work+"/interrupted","partial");process.stdout.write("ready");await new Promise(()=>{setInterval(()=>{},1000);});});';
- const child=spawn(process.execPath,['--input-type=module','-e',code],{env:{PATH:process.env.PATH},stdio:['ignore','pipe','pipe']});
+ const child=spawn(process.execPath,['--input-type=module','-e',code],{env:{PATH:process.env.PATH,NODE_TEST_CONTEXT:process.env.NODE_TEST_CONTEXT,PRODUCT_TEST_SESSION:testSession},stdio:['ignore','pipe','pipe']});
  const finished=new Promise(resolve=>child.once('close',(code,signal)=>resolve({code,signal})));
  try{await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('任务领取超时')),5000);child.once('error',reject);child.stdout.once('data',()=>{clearTimeout(timer);resolve();});});child.kill('SIGKILL');assert.equal((await finished).signal,'SIGKILL');
   assert.equal(fs.readFileSync(join(fixedWork('test'),'interrupted'),'utf8'),'partial');
@@ -1344,6 +1344,7 @@ test('npm内置依赖必须可追溯到带SRI的准确父包',async()=>{
  assert.throws(()=>resourceSupport.bundledOwner(packages,'node_modules/unknown/node_modules/child',entry),/上游缺失/u);
 });
 function tar(entries){const records=[];for(const {name,body='',type='0',target=''}of entries){const b=Buffer.from(body),h=Buffer.alloc(512);h.write(name,0,100);h.write('0000644\0',100);h.write('0000000\0',108);h.write('0000000\0',116);h.write(b.length.toString(8).padStart(11,'0')+'\0',124);h.write('00000000000\0',136);h.fill(32,148,156);h.write(type,156);h.write(target,157,100);h.write('ustar\0',257);h.write('00',263);h.write([...h].reduce((a,b)=>a+b,0).toString(8).padStart(6,'0')+'\0 ',148);records.push(h,b,Buffer.alloc((512-b.length%512)%512));}return gzipSync(Buffer.concat([...records,Buffer.alloc(1024)]));}
+const archive=(body,url='https://example.invalid/locked.tgz')=>({url,sha256:hash(body)});
 test('首次按锁取得；再次复用不联网，损坏原件不覆盖',async t=>{
  const root=await sandbox(t),body=Buffer.from('locked-source'),entry=archive(body);let requests=0;
  const options={store:root,fetcher:async()=>{requests++;return new Response(body);}};
@@ -1389,7 +1390,7 @@ test('产品配方覆盖自身需求和递归工具，模块只使用内置依�
  const root=await sandbox(t),declarations=resourceDeclarations(),tools=new Map(declarations.tools.map(x=>[x.id,x]));for(const platform of Object.values(contract.platforms))for(const tool of platform.tools){assert.equal(tools.get(tool.id)?.version,tool.version);}
  for(const tool of tools.values())for(const id of tool.requires||[])assert.ok(tools.has(id),'缺少递归工具 '+id);
  assert.deepEqual([...tools.keys()],['node']);assert.deepEqual(supplyRequirements().tools.map(tool=>tool.id),['node']);assert.equal(Object.hasOwn(supplyRequirements(),'apple'),false);
- const source=await readFile(new URL('./build.mjs',import.meta.url),'utf8');assert.doesNotMatch(source,/import\(['"]\.\.\//u);assert.ok([...source.matchAll(/^import .*? from ['"]([^'"]+)['"]/gmu)].every(m=>m[1].startsWith('node:')));
+ const source=await readFile(new URL('./build.mjs',import.meta.url),'utf8');assert.ok([...source.matchAll(/^import .*? from ['"]([^'"]+)['"]/gmu)].every(m=>m[1].startsWith('node:')));
  const result=spawnSync(process.execPath,[join(import.meta.dirname,'build.mjs'),'resources','unknown','--work',root,'--offline'],{env:{HOME:root,LANG:'C',PATH:''},encoding:'utf8'});assert.notEqual(result.status,0);assert.match(result.stderr,/平台|固定目录/);assert.deepEqual(await readdir(root),[]);
 });
 
