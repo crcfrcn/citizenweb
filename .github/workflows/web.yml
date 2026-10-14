@@ -103,12 +103,17 @@ jobs:
             const publish=new Map([[assetName,bytes],['release-manifest.json',manifest],['SHA256SUMS',checksums]]);
             for(const [name,data] of publish)writeFileSync(join(task,name),data,{flag:'wx',mode:0o600});
             const tag=`citizenweb-web-v${version}-r${run}-a${attempt}`;
-            let created=false;
+            let tagCreated=false,created=false;
             try{
+              const tagRef=JSON.parse(gh(['api','-X','POST','repos/'+repo+'/git/refs','-f','ref=refs/tags/'+tag,'-f','sha='+sha]));
+              tagCreated=true;
+              if(tagRef.ref!=='refs/tags/'+tag||tagRef.object?.sha!==sha||tagRef.object.type!=='commit')fail('正式Tag创建身份无效');
               gh(['release','create',tag,...[...publish.keys()].map(name=>join(task,name)),'--repo',repo,'--target',sha,
-                '--title',`citizenweb · web · ${version}`,'--notes',`Source: ${sha}\nRun: ${run} / ${attempt}`,'--draft','--latest=false']);
+                '--title',`citizenweb · web · ${version}`,'--notes',`Source: ${sha}\nRun: ${run} / ${attempt}`,'--verify-tag','--draft','--latest=false']);
               created=true;
-              const readback=api('releases/tags/'+encodeURIComponent(tag));
+              const draft=JSON.parse(gh(['release','view',tag,'--repo',repo,'--json','databaseId,tagName,isDraft,targetCommitish']));
+              if(!Number.isSafeInteger(draft.databaseId)||draft.databaseId<1||draft.tagName!==tag||!draft.isDraft||draft.targetCommitish!==sha)fail('草稿Release查询身份无效');
+              const readback=api('releases/'+draft.databaseId);
               if(readback.tag_name!==tag||!readback.draft||readback.target_commitish!==sha
                 ||readback.assets?.length!==publish.size)fail('草稿Release身份无效');
               const ref=api('git/ref/tags/'+encodeURIComponent(tag));
@@ -123,8 +128,10 @@ jobs:
               if(final.draft||final.prerelease||final.tag_name!==tag)fail('正式Release发布未确认');
               console.log(JSON.stringify({tag,release_id:final.id,assets:[...publish.keys()]}));
             }catch(error){
-              if(created)try{gh(['release','delete',tag,'--repo',repo,'--yes','--cleanup-tag']);}catch(cleanup){
-                throw new Error(error.message+'；本次Release撤销未确认：'+cleanup.message);}
+              try{
+                if(created)gh(['release','delete',tag,'--repo',repo,'--yes']);
+                if(tagCreated)gh(['api','-X','DELETE','repos/'+repo+'/git/refs/tags/'+tag]);
+              }catch(cleanup){throw new Error(error.message+'；本次Release或Tag撤销未确认：'+cleanup.message);}
               throw error;
             }
           }});
