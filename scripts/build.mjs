@@ -785,7 +785,32 @@ async function installTool(library,tool,options){
 }
 async function checkedLock(path){await regular(path);const s=await lstat(path);if(s.size>32*1024**2)fail('锁文件超限');return readFile(path,'utf8');}
 async function packageOriginal(entry,options){return acquireArchive(entry,{work:options.library.work,store:join(options.dependencyRoot||join(options.library.root,'..','rely'),'archives'),optional:options.optionalDependencies,offline:options.offline,fetcher:options.fetcher,signal:options.signal});}
-async function prepareNpm(locks,work,options){const cache=join(work,'npm');await directory(cache,true);const node=options.library.installed.get('node').path,require=createRequire(join(dirname(node),'../lib/node_modules/npm/bin/npm-cli.js')),cacache=require('cacache');for(const lock of locks){const document=JSON.parse(await checkedLock(lock));if(![2,3].includes(document.lockfileVersion)||!document.packages)fail('npm原始锁格式无效');for(const [path,entry]of Object.entries(document.packages)){if(!path||entry.link)continue;if(!entry.resolved||!entry.integrity||!entry.version)fail('npm包未锁定来源');const file=await packageOriginal({url:entry.resolved,integrity:entry.integrity},options);await cacache.put(join(cache,'_cacache'),'make-fetch-happen:request-cache:'+entry.resolved,await readFile(file),{integrity:entry.integrity,metadata:{time:Date.now(),url:entry.resolved,reqHeaders:{},resHeaders:{'content-type':'application/octet-stream'}}});}}return {npmCache:cache};}
+function bundledOwner(packages,path,entry){
+ if(entry?.inBundle!==true||!entry.version)fail('npm内置包身份无效');
+ let owner=path;
+ for(;;){
+  const marker=owner.lastIndexOf('/node_modules/');if(marker<0)fail('npm内置包没有准确上游');
+  owner=owner.slice(0,marker);const parent=packages[owner];if(!parent?.version)fail('npm内置包上游缺失');
+  if(parent.resolved&&parent.integrity)return owner;
+  if(parent.inBundle!==true)fail('npm内置包上游未锁定');
+ }
+}
+async function prepareNpm(locks,work,options){
+ const cache=join(work,'npm');await directory(cache,true);
+ const node=options.library.installed.get('node').path,require=createRequire(join(dirname(node),'../lib/node_modules/npm/bin/npm-cli.js')),cacache=require('cacache');
+ for(const lock of locks){
+  const document=JSON.parse(await checkedLock(lock));if(![2,3].includes(document.lockfileVersion)||!document.packages)fail('npm原始锁格式无效');
+  for(const [path,entry]of Object.entries(document.packages)){
+   if(!path||entry.link)continue;
+   // inBundle 成员从上游锁定 tarball 取得，不存在单独 URL/SRI；逐层核对父包身份。
+   if(entry.inBundle===true){bundledOwner(document.packages,path,entry);continue;}
+   if(!entry.resolved||!entry.integrity||!entry.version)fail('npm包未锁定来源');
+   const file=await packageOriginal({url:entry.resolved,integrity:entry.integrity},options);
+   await cacache.put(join(cache,'_cacache'),'make-fetch-happen:request-cache:'+entry.resolved,await readFile(file),{integrity:entry.integrity,metadata:{time:Date.now(),url:entry.resolved,reqHeaders:{},resHeaders:{'content-type':'application/octet-stream'}}});
+  }
+ }
+ return {npmCache:cache};
+}
 // 可选供给遵循唯一原件协议，产品独立解析本仓锁，拒绝旧快照和状态库回退。
 async function readDependencySupply(objects) {
  if(!objects||!await stat(objects))return null;await directory(objects);const file=join(dirname(objects),'index.json');await regular(file);
@@ -855,7 +880,7 @@ async function prepareToolSupply(tool,{original,payload,work,signal,offline,acqu
 }
 
 // Build 仅公开 Node、npm 原锁所需的资源能力；门禁策略归门禁文件。
-const resourceSupport=Object.freeze({root,hash,safePath,inside,stat,regular,directory,permissions,directoryCheck,retainedResourcePath,toolDefinitions,toolArchive,objectRecipe,verifyToolObject,prepareNpm,cleanEnvironment,runResourceProcess,inventory,acquireArchive,extractArchive,resources,rm});
+const resourceSupport=Object.freeze({root,hash,safePath,inside,stat,regular,directory,permissions,directoryCheck,retainedResourcePath,toolDefinitions,toolArchive,objectRecipe,verifyToolObject,prepareNpm,bundledOwner,cleanEnvironment,runResourceProcess,inventory,acquireArchive,extractArchive,resources,rm});
 
 return Object.freeze({runResourceProcess,inventory,acquireArchive,extractArchive,readDependencySupply,resourceDeclarations,bootstrapNode,resources,prepareResourceSupply,supplyRequirements,assertWorkQuiescent,prepareToolSupply,resourceSupport});
 })();
@@ -1309,6 +1334,15 @@ const {gzipSync} = await import('node:zlib');
 
 const hash=b=>createHash('sha256').update(b).digest('hex');
 async function sandbox(t){const root=await realpath(await mkdtemp(join(tmpdir(),contract.product_id+'-resources-')));t.after(()=>rm(root,{recursive:true,force:true}));return root;}
+test('npm内置依赖必须可追溯到带SRI的准确父包',async()=>{
+ const packages=JSON.parse(await readFile(join(root,'package-lock.json'),'utf8')).packages;
+ const bundled=Object.entries(packages).filter(([,entry])=>entry.inBundle===true);
+ assert.equal(bundled.length,6);
+ for(const [path,entry]of bundled)assert.equal(resourceSupport.bundledOwner(packages,path,entry),'node_modules/@tailwindcss/oxide-wasm32-wasi');
+ const [path,entry]=bundled[0],parent='node_modules/@tailwindcss/oxide-wasm32-wasi';
+ assert.throws(()=>resourceSupport.bundledOwner({...packages,[parent]:{version:'4.2.2'}},path,entry),/上游未锁定/u);
+ assert.throws(()=>resourceSupport.bundledOwner(packages,'node_modules/unknown/node_modules/child',entry),/上游缺失/u);
+});
 function tar(entries){const records=[];for(const {name,body='',type='0',target=''}of entries){const b=Buffer.from(body),h=Buffer.alloc(512);h.write(name,0,100);h.write('0000644\0',100);h.write('0000000\0',108);h.write('0000000\0',116);h.write(b.length.toString(8).padStart(11,'0')+'\0',124);h.write('00000000000\0',136);h.fill(32,148,156);h.write(type,156);h.write(target,157,100);h.write('ustar\0',257);h.write('00',263);h.write([...h].reduce((a,b)=>a+b,0).toString(8).padStart(6,'0')+'\0 ',148);records.push(h,b,Buffer.alloc((512-b.length%512)%512));}return gzipSync(Buffer.concat([...records,Buffer.alloc(1024)]));}
 test('首次按锁取得；再次复用不联网，损坏原件不覆盖',async t=>{
  const root=await sandbox(t),body=Buffer.from('locked-source'),entry=archive(body);let requests=0;
