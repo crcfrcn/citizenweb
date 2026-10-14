@@ -112,22 +112,15 @@ node scripts/build.mjs describe
 - 2026-07-01：节点章节拆为节点简介、治理机构、链下清算行；链上中国章节拆为链上中国简介、注册局、链上立法、链上选举。
 - 后续更新白皮书时，应继续以 `citizenweb/src/whitepaper.md` 为唯一正文真源，并保持目录锚点与正文标题同步。
 
-#### 3.4. 产品页下载按钮（CitizenServe 白名单代理）
+#### 3.4. 产品页下载按钮
 
 - 产品页（`pages/Ecosystem.tsx`）三卡右上角各有醒目「下载」按钮（金色 `text-gold-400`、`text-xl`、加粗），点击弹出平台下拉（`components/DownloadButton.tsx`，自带点击外部关闭）。
-- 文件下载由 `DownloadButton.tsx` 生成同源 `/api${downloadPath}`，再交给 CitizenServe 的既有
-  白名单下载入口解析正式发布记录；CitizenWeb 不直接拼接 GitHub Release 地址或资产名。
-- 下载发布指针唯一保存于 CitizenServe 绑定的 D1 `citizenweb-download`；CitizenWeb 只拥有公开页面与
-  下载入口展示，不拥有数据库实现、凭据或发布写入逻辑。
-- 各卡公开选项与当前服务端路径：
+- 公民与公民钱包 Android 继续使用既有同源 `/api${downloadPath}`；iOS 继续显示商店提示，不改变两产品下载路径。
+- 公民链四个平台在浏览器直接读取 GitHub 公开 Release 列表，逐件核对本平台正式 Tag、自动化证明、版本、唯一安装包、摘要与准确 `browser_download_url`，并回读候选对应的 GitHub Run 成功终态。按版本、Run 与 Attempt 选最新有效正式版；选择平台后直接导航至 GitHub 安装包，不经 CitizenServe、D1 指针或官网文件代理。缺少正式版、列表超限、GitHub 查询失败及错误资产均显示错误，不回退其它平台或源码归档。
+- 各卡公开选项：
   - 公民 CitizenApp：`iOS`（弹提示去 App Store，无直链）/ `Android` → `/download/citizenapp/android`
   - 公民钱包 CitizenWallet：`iOS`（弹提示）/ `Android` → `/download/citizenwallet/android`
-  - 公民链 CitizenChain：`macOS` → `/download/citizenchain/macOS`、`Windows` →
-    `/download/citizenchain/Windows`、`LinuxARM` → `/download/citizenchain/LinuxARM`、
-    `LinuxAMD` → `/download/citizenchain/LinuxAMD`
-- CitizenChain 的 `label` 与公开下载路径平台段使用同一个标准平台名；CitizenServe 在服务端
-  类型化边界内映射到既有内部发布键。旧架构拼接路径不保留兼容入口。本次只完成源码合同迁移，
-  没有部署 CitizenWeb/CitizenServe，也没有修改 Release Tag、资产名、manifest 或生产 D1。
+  - 公民链 CitizenChain：macOS 下载 `.dmg`、Windows 下载 `.exe`、LinuxARM 和 LinuxAMD 各下载本架构 `.deb`；平台键仅用于选择准确 GitHub Release，不形成公民链服务端下载请求。
 - iOS 为纯提示文案（`window.alert`），暂无 App Store 直链。
 
 #### 3.5. 标签页标题与图标
@@ -154,14 +147,6 @@ node scripts/build.mjs describe
 ## 双仓统一流程最终收口（第 7.5 步）
 
 本产品执行统一流程规则：本机编译中间物只进入本轮塔塔缓存库的build目录并按终态规则清理；GitHub CI 的作业过程数据只进入该次Runner任务空间；正式Release从干净编译状态执行。源码不进入塔塔缓存库、塔塔依赖库或塔塔产物库。
-
-## CitizenChain 标准下载路径验证（GMB 第 2.6 步，2026-09-02）
-
-- `Ecosystem.tsx` 的 CitizenChain 下载数组精确锁定四个标准平台名及四条同名公开路径；六条旧
-  架构拼接或小写路径仅进入负向断言，不能回流到生效页面源码。
-- `release_manifest.test.mjs` 9/9 通过；CitizenServe 两个定向测试文件 17/17、跨仓
-  `repo_guard` 13/13、外部调用方 静态合同 1/1 和 macOS 原生下载合同 XCTest 1/1 均通过。
-- 本步没有执行官网构建、远程 CI、正式 Release、Pages 发布或任何生产部署。
 
 ## CitizenWeb 交付渠道合同（GMB 第 2.9 步，2026-09-02）
 

@@ -1980,3 +1980,52 @@ if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===imp
   assert.equal(acquired,1);assert.equal((await readdir(work)).some(name=>name.startsWith('.tool-recipe-')),false);
  }));
 }
+
+// 只运行下载组件的纯解析段；合成GitHub回执不触发真实网络或产品编译。
+if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===import.meta.filename){
+ const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict');
+ const {stripTypeScriptTypes}=await import('node:module');
+ test('公民链平台下载直达最新成功Run的唯一GitHub正式安装包',async()=>{
+  const source=readFileSync(join(root,'src/components/DownloadButton.tsx'),'utf8');
+  const start=source.indexOf('export type CitizenChainPlatform'),end=source.indexOf('interface DownloadButtonProps');
+  assert.ok(start>0&&end>start);
+  const code=stripTypeScriptTypes(source.slice(start,end));
+  const {resolveCitizenChainDownload}=await import('data:text/javascript,'+encodeURIComponent(code));
+  const sha='b'.repeat(40),digest='a'.repeat(64);
+  const target={macos:['macOS','dmg','macos.yml'],windows:['Windows','exe','windows.yml'],
+   'linux-arm':['LinuxARM','deb','linuxarm.yml'],'linux-amd':['LinuxAMD','deb','linuxamd.yml']};
+  const release=(platform,version,run)=>{
+   const [stem,extension,workflow]=target[platform],tag=`citizenchain-${platform}-v${version}-r${run}-a1`;
+   const name=`citizenchain-node-${stem}-v${version}.${extension}`;
+   const url=`https://github.com/crcfrcn/citizenchain/releases/download/${tag}/${name}`;
+   const asset={name,state:'uploaded',size:8,digest:'sha256:'+digest,browser_download_url:url};
+   const proof={schema:1,repository:'crcfrcn/citizenchain',product_id:'citizenchain',platform,
+    workflow:'.github/workflows/'+workflow,tag,version,run_id:run,run_attempt:1,source_sha:sha,
+    assets:[{name,size:8,sha256:digest}]};
+   return {tag_name:tag,draft:false,prerelease:false,published_at:'2026-10-13T00:00:00Z',
+    target_commitish:sha,body:`<!-- automation:${JSON.stringify(proof)} -->`,assets:[asset]};
+  };
+  const releases=[release('macos','1.2.3',42),release('macos','1.2.4',43),release('windows','1.2.3',44),
+   release('linux-arm','1.2.3',45),release('linux-amd','1.2.3',46)];
+  const calls=[];
+  const request=async url=>{calls.push(url);assert.ok(url.startsWith('https://api.github.com/repos/crcfrcn/citizenchain/'));
+   if(url.includes('/releases?'))return Response.json(releases);
+   const run=Number(url.split('/').at(-1));return Response.json({id:run,run_attempt:1,status:'completed',
+    conclusion:run===43?'failure':'success',event:'workflow_dispatch',head_branch:'main',head_sha:sha,
+    path:'.github/workflows/'+(run===44?'windows.yml':run===45?'linuxarm.yml':run===46?'linuxamd.yml':'macos.yml'),
+    repository:{full_name:'crcfrcn/citizenchain'}});
+  };
+  for(const platform of Object.keys(target)){
+   const url=await resolveCitizenChainDownload(platform,request);
+   assert.equal(url,releases.find(value=>value.tag_name.startsWith('citizenchain-'+platform+'-v1.2.3'))?.assets[0].browser_download_url);
+  }
+  assert.ok(calls.every(url=>!url.includes('/api/download')));
+  await assert.rejects(resolveCitizenChainDownload('macos',async()=>Response.json([])),/尚无/u);
+  await assert.rejects(resolveCitizenChainDownload('macos',async()=>Response.json([], {status:403})),/限额/u);
+  const wrong=release('macos','1.2.3',42);wrong.assets[0].browser_download_url='https://example.test/other';
+  await assert.rejects(resolveCitizenChainDownload('macos',async()=>Response.json([wrong])),/尚无/u);
+  const forged=release('macos','1.2.3',42);forged.body='<!-- automation:{} -->';
+  await assert.rejects(resolveCitizenChainDownload('macos',async()=>Response.json([forged])),/尚无/u);
+  await assert.rejects(resolveCitizenChainDownload('macos',async()=>Response.json(Array(101).fill(release('macos','1.2.3',42)))),/列表无效/u);
+ });
+}
