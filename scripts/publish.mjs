@@ -62,7 +62,7 @@ export function inspectPackage(bytes,manifestBytes,sumsBytes,version,sourceSHA){
   seen.add(row.path);if(row.path.startsWith('dist/')&&row.path!=='dist/citizenweb-release.json')assets.push(row);
  }
  if(required.some(path=>!seen.has(path))||files.size!==seen.size+2||files.size!==new Set([...seen,'release-manifest.json','SHA256SUMS']).size
-   ||manifest.files.map(row=>row.path).join('\0')!==[...seen].sort().join('\0'))fail('正式包成员不完整');
+   ||manifest.files.map(row=>row.path).join('\0')!==[...seen].sort((a,b)=>a.localeCompare(b)).join('\0'))fail('正式包成员不完整');
  if(source.version!==version||lock.version!==version||lock.packages?.['']?.version!==version)fail('正式包版本不一致');
  if(digest(Buffer.from(stable(assets)))!==manifest.assets_sha256)fail('静态资源清单摘要不一致');
  if(!exact(marker,['product_id','delivery_channel','software_version','git_commit_sha','assets_sha256'])
@@ -181,7 +181,8 @@ if(testing){
   const source='a'.repeat(40),version='1.0.0',tag='citizenweb-web-v1.0.0-r42-a1';
   const fileBytes=new Map([['package.json',Buffer.from(JSON.stringify({version,devDependencies:{wrangler:'4.121.0'}}))],
    ['package-lock.json',Buffer.from(JSON.stringify({version,packages:{'':{version},'node_modules/wrangler':{version:'4.121.0'}}}))],
-   ['dist/index.html',Buffer.from('<html>synthetic</html>')],['dist/app.js',Buffer.from('synthetic')]]);
+   ['dist/index.html',Buffer.from('<html>synthetic</html>')],['dist/app.js',Buffer.from('synthetic')],
+   ['dist/assets/Whitepaper.js',Buffer.from('synthetic-whitepaper')]]);
   const assets=[...fileBytes].filter(([path])=>path.startsWith('dist/')).map(([path,bytes])=>({path,sha256:digest(bytes)})).sort((a,b)=>a.path.localeCompare(b.path));
   const assets_sha256=digest(Buffer.from(stable(assets)));
   fileBytes.set('dist/citizenweb-release.json',Buffer.from(JSON.stringify({product_id:'citizenweb',delivery_channel:'web',software_version:version,git_commit_sha:source,assets_sha256})));
@@ -200,7 +201,7 @@ if(testing){
   return {run,release,body,request};
  }
  test('成功Web自动化的三件正式资产与全部归档成员独立验真',async()=>{
-  const value=await preparePublication({request:fixture().request});assert.equal(value.archive_files,7);assert.equal(value.assets.length,3);assert.equal(value.version,'1.0.0');
+  const value=await preparePublication({request:fixture().request});assert.equal(value.archive_files,8);assert.equal(value.assets.length,3);assert.equal(value.version,'1.0.0');
  });
  test('归档缺失、来源错配与重复成功Run均拒绝',async()=>{
   assert.throws(()=>archiveFiles(Buffer.from('not-gzip')),/解压失败/u);
