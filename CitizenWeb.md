@@ -225,6 +225,8 @@ node scripts/build.mjs describe
 
 `.github/workflows/web.yml` 由 GitHub main 的手动派发启动，在 Xcode 27 ARM64 Runner 上调用本仓 `scripts/build.mjs` 完成静态编译。YAML 在本轮 Runner 临时目录组包，以 `scripts/publish.mjs` 的 `inspectPackage` 核验三件正式资产，创建并回读本平台 Tag/Release。失败时只撤销本次创建的 Release 与 Tag。正式资产为 `citizenweb-release.tgz`、`release-manifest.json`、`SHA256SUMS`。不自动部署 Pages。
 
+Apple 工具由当前 `xcode-select` 指定的 Xcode 开发目录及 `xcrun --find` 定位；Xcode 内的编译器允许官方安装包自带的符号链接与硬链接，但解析后的目标必须仍在该开发目录且是可执行普通文件。系统工具仅接受固定 `/usr/bin` 入口。普通下载资源继续要求独占普通文件，两类来源不混用。
+
 ### Publish
 
 `scripts/publish.mjs` 是本产品唯一正式渠道发布入口。准备阶段只通过公开 HTTPS 读取最新成功 Run 对应的正式资产，验真归档成员、版本和摘要；最终确认后再次读取并比对同一候选，只在本轮独占目录物化经清单约束的静态文件和原锁 Wrangler，调用控制台原生安全接口向既有 Pages 项目 `citizenweb` 的 `main` 生产环境上传，回读部署身份。它不导入 Build 或 Workflow，不创建 Release。Cloudflare Pages 官方 Direct Upload 要求 `CLOUDFLARE_ACCOUNT_ID` 与具备 Pages Edit 权限的 API Token；控制台准备冷签时读取真实的上一次 Pages 生产部署 ID，让离线钱包按既有 `previous_deployment_id` 字段准确展示；最终上传前再次回读同一 ID，变化即要求重签。控制台只在 Touch ID 与本次 QR 冷签后向锁定 Wrangler 的子进程交付令牌，不把值写进产品仓库或日志。[Cloudflare 官方说明](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/)

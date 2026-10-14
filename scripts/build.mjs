@@ -1171,7 +1171,14 @@ async function verifyAppleTools(library,{names=['xcodebuild'],signal,run=exec,en
   const wanted=library.tools.find(tool=>tool.id==='xcode');if(!wanted||!Array.isArray(names)||names.some(name=>!appleBundleTools.has(name)&&!Object.hasOwn(appleSystemTools,name)))fail('Apple工具需求无效');
   const supplied=resourceSupplies.getStore();if(supplied)return supplied.acquireApple({...supplyRequirements().apple,names});
   const env=cleanEnvironment(environment),developerDirectory=(await run('/usr/bin/xcode-select',['-p'],{env,signal})).stdout.trim();await directory(developerDirectory);
-  const tools={};for(const name of names){const path=appleSystemTools[name]||(name==='xcodebuild'?join(developerDirectory,'usr/bin/xcodebuild'):(await run('/usr/bin/xcrun',['--find',name],{env:{...env,DEVELOPER_DIR:developerDirectory},signal})).stdout.trim());await regular(path);tools[name]=await realpath(path);}
+  const tools={};for(const name of names){
+    const system=appleSystemTools[name],path=system||(name==='xcodebuild'?join(developerDirectory,'usr/bin/xcodebuild'):(await run('/usr/bin/xcrun',['--find',name],{env:{...env,DEVELOPER_DIR:developerDirectory},signal})).stdout.trim());
+    if(!isAbsolute(path)||resolve(path)!==path||(!system&&!inside(developerDirectory,path)))fail('Apple工具路径越界：'+name);
+    const actual=await realpath(path),info=await lstat(actual);
+    // Xcode 内的 clang++ 等可为链接或硬链接；只接受解析后仍位于当前 Xcode 的可执行普通文件。
+    if((system&&path!==system)||(!system&&!inside(developerDirectory,actual))||!info.isFile()||!(info.mode&0o111))fail('Apple工具身份无效：'+name);
+    tools[name]=actual;
+  }
   return {developerDirectory,version:wanted.version,tools};
  }
 
@@ -1744,7 +1751,7 @@ if (process.env.NODE_TEST_CONTEXT && process.argv.length === 2 && !process.execA
 const {test} = await import('node:test');
 const {default:assert} = await import('node:assert/strict');
 const {createHash} = await import('node:crypto');
-const {mkdtemp,realpath,mkdir,readFile,writeFile,readdir,rm,symlink,chmod,lstat,rename} = await import('node:fs/promises');
+const {mkdtemp,realpath,mkdir,readFile,writeFile,readdir,rm,symlink,link,chmod,lstat,rename} = await import('node:fs/promises');
 const {dirname,join,resolve} = await import('node:path');
 const tmpdir=testRoot;
 const {spawnSync} = await import('node:child_process');
@@ -1753,6 +1760,19 @@ const {gzipSync} = await import('node:zlib');
 
 const hash=b=>createHash('sha256').update(b).digest('hex');
 async function sandbox(t){const root=await realpath(await mkdtemp(join(tmpdir(),contract.product_id+'-resources-')));t.after(()=>rm(root,{recursive:true,force:true}));return root;}
+test('Apple 工具接受当前 Xcode 内的链接与硬链接并拒绝越界目标',async t=>{
+ const base=await sandbox(t),developerDirectory=join(base,'Xcode.app/Contents/Developer'),bin=join(developerDirectory,'usr/bin');
+ await mkdir(bin,{recursive:true});await writeFile(join(bin,'clang'),'#!/bin/sh\n',{mode:0o755});
+ await symlink('clang',join(bin,'clang++'));await link(join(bin,'clang'),join(bin,'ar'));
+ const library={tools:[{id:'xcode',version:'27.0'}]};
+ const run=async(command,args)=>({stdout:(command==='/usr/bin/xcode-select'?developerDirectory:join(bin,args[1]))+'\n'});
+ const result=await resourceSupport.verifyAppleTools(library,{names:['clang','clang++','ar'],run});
+ assert.equal(result.tools['clang++'],join(bin,'clang'));assert.equal(result.tools.ar,join(bin,'ar'));
+ await rm(join(bin,'clang++'));await writeFile(join(base,'outside'),'#!/bin/sh\n',{mode:0o755});await symlink(join(base,'outside'),join(bin,'clang++'));
+ await assert.rejects(resourceSupport.verifyAppleTools(library,{names:['clang++'],run}),/路径越界|身份无效/u);
+ await rm(join(bin,'clang++'));await writeFile(join(bin,'clang++'),'plain',{mode:0o600});
+ await assert.rejects(resourceSupport.verifyAppleTools(library,{names:['clang++'],run}),/身份无效/u);
+});
 const archive=(body,url='https://example.invalid/locked.tgz')=>({url,sha256:hash(body)});
 function tar(entries){const records=[];for(const {name,body='',type='0',target=''}of entries){const b=Buffer.from(body),h=Buffer.alloc(512);h.write(name,0,100);h.write('0000644\0',100);h.write('0000000\0',108);h.write('0000000\0',116);h.write(b.length.toString(8).padStart(11,'0')+'\0',124);h.write('00000000000\0',136);h.fill(32,148,156);h.write(type,156);h.write(target,157,100);h.write('ustar\0',257);h.write('00',263);h.write([...h].reduce((a,b)=>a+b,0).toString(8).padStart(6,'0')+'\0 ',148);records.push(h,b,Buffer.alloc((512-b.length%512)%512));}return gzipSync(Buffer.concat([...records,Buffer.alloc(1024)]));}
 test('首次按锁取得；再次复用不联网，损坏原件不覆盖',async t=>{
