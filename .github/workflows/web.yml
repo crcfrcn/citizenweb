@@ -25,11 +25,11 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import {createHash} from 'node:crypto';
-          import {execFileSync,spawnSync} from 'node:child_process';
+          import {execFileSync} from 'node:child_process';
           import {lstatSync,mkdirSync,readFileSync,readdirSync,writeFileSync} from 'node:fs';
           import {basename,join,relative,sep} from 'node:path';
           import {gzipSync} from 'node:zlib';
-          import {execute} from './scripts/build.mjs';
+          import {checkoutSHA,execute} from './scripts/build.mjs';
           import {inspectPackage} from './scripts/publish.mjs';
 
           const repo='crcfrcn/citizenweb',product='citizenweb',platform='web';
@@ -44,7 +44,7 @@ jobs:
             ||process.env.GITHUB_WORKFLOW_REF!==repo+'/.github/workflows/web.yml@refs/heads/main'
             ||![run,attempt,number].every(value=>Number.isSafeInteger(value)&&value>0)
             ||!/^[a-f0-9]{40}$/u.test(process.env.GITHUB_SHA||'')
-            ||spawnSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).stdout?.trim()!==process.env.GITHUB_SHA)fail('GitHub源码与运行身份无效');
+            ||checkoutSHA()!==process.env.GITHUB_SHA)fail('GitHub源码与运行身份无效');
           const seed=JSON.parse(readFileSync('package.json','utf8')).version;
           const ordinal=value=>{const match=/^(0|[1-9]\d*)\.(0|[1-9]\d?)\.(0|[1-9]\d?)$/u.exec(value||'');
             if(!match)fail('版本声明无效');return BigInt(match[1])*10000n+BigInt(match[2])*100n+BigInt(match[3]);};

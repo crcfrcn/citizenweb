@@ -198,28 +198,8 @@ export const contract=Object.freeze({
     "web": {
       "tools": [
         {
-          "id": "git",
-          "version": "2.54.0"
-        },
-        {
           "id": "node",
           "version": "25.2.1"
-        },
-        {
-          "id": "posix",
-          "version": "27.0"
-        },
-        {
-          "id": "bash",
-          "version": "5.3.20"
-        },
-        {
-          "id": "grep",
-          "version": "3.12"
-        },
-        {
-          "id": "sed",
-          "version": "4.10"
         }
       ],
       "locks": [
@@ -238,6 +218,12 @@ const product=contract.product_id, prefix=product.toUpperCase();
 const inside=(base,path)=>{const r=relative(base,path);return r===''||!isAbsolute(r)&&r!=='..'&&!r.startsWith('..'+sep);};
 const fail=message=>{throw Error(product+' Build：'+message);};
 export function checkWork(work) { return checkFixedWork(work); }
+// GitHub checkout 固定提交在独立 HEAD 中；用 Node 核对，不为 Web 编译另建 Git 工具闭包。
+export function checkoutSHA(directory=root){
+ const git=join(directory,'.git'),head=join(git,'HEAD'),parent=lstatSync(git),entry=lstatSync(head);
+ if(!parent.isDirectory()||parent.isSymbolicLink()||!entry.isFile()||entry.isSymbolicLink()||entry.nlink!==1||entry.size>64)fail('GitHub检出提交身份无效');
+ const value=readFileSync(head,'utf8');if(!/^[a-f0-9]{40}\n?$/u.test(value))fail('GitHub检出提交身份无效');return value.trim();
+}
 
 // 产品自己拥有target工作边界；测试与独立入口也不借用调用方的全局缓存。
 export function productTarget(platform) {
@@ -275,6 +261,7 @@ export function resourceEnvironment(platform,work,receipt,base={}){
   ||!receipt.tools||!receipt.dependencies||!receipt.archives||Object.keys(receipt.archives).length)fail('资源回执身份无效');
  const allowed=new Set(['CITIZENWEB_RESOURCE_MODE','PRODUCT_WORK_DIR','PATH']);
  if(Object.keys(receipt.environment||{}).some(key=>!allowed.has(key)))fail('资源回执包含未声明环境或注入变量');
+ if(Object.keys(receipt.tools).sort().join(',')!=='node'||receipt.environment?.PATH!==dirname(receipt.tools.node?.path||''))fail('Web工具闭包必须只有锁定Node');
  for(const tool of declared.tools){const value=receipt.tools[tool.id];
   if(!value||value.version!==tool.version||typeof value.path!=='string'||!isAbsolute(value.path)||resolve(value.path)!==value.path)fail('缺少准确版本的工具：'+tool.id);
   const info=lstatSync(value.path);if(!info.isFile()||info.isSymbolicLink()||!(info.mode&0o111)||realpathSync(value.path)!==value.path)fail('工具入口必须是普通执行器：'+tool.id);
@@ -283,8 +270,8 @@ export function resourceEnvironment(platform,work,receipt,base={}){
  const env={HOME:join(work,'home'),LANG:'C.UTF-8',LC_ALL:'C.UTF-8',...receipt.environment,TMPDIR:join(work,'tmp'),TMP:join(work,'tmp'),TEMP:join(work,'tmp'),
   XDG_CACHE_HOME:join(work,'cache'),XDG_CONFIG_HOME:join(work,'config'),npm_config_offline:'true',npm_config_audit:'false',npm_config_fund:'false',
   npm_config_cache:own.npmCache};
- env.NODE=receipt.tools.node.path;env.GIT=receipt.tools.git.path;env.PRODUCT_GIT_BIN=env.GIT;env.PRODUCT_BASH_BIN=receipt.tools.bash.path;
- env.PATH=[...new Set(Object.entries(receipt.tools).filter(([id])=>id!=='posix').map(([,value])=>dirname(value.path)).concat((env.PATH||'').split(':')).filter(Boolean))].join(':');
+ env.NODE=receipt.tools.node.path;
+ env.PATH=dirname(receipt.tools.node.path);
  env.CITIZENWEB_WORK_DIR=work;env.CITIZENWEB_PROJECT_ROOT=join(work,'source');env.PRODUCT_SOURCE_DIR=env.CITIZENWEB_PROJECT_ROOT;
  env.CITIZENWEB_RESOURCE_MODE=base.PRODUCT_RESOURCE_FD==='4'?'provided':env.CITIZENWEB_RESOURCE_MODE||'independent';
  const execution=executions.getStore();if(execution)execution.buildEnvironment=env;
@@ -410,8 +397,7 @@ async function runProductTests(platform,work,receipt,base){
  if(!node||node.version!==contract.platforms[platform].tools.find(value=>value.id==='node')?.version
   ||!isAbsolute(node.path)||realpathSync(node.path)!==node.path)throw Error('本仓测试缺少准确Node入口');
  // Node测试运行器自行设置测试子进程身份；预设NODE_TEST_CONTEXT会让它跳过全部文件。
- const testEnvironment={HOME:work,USER:base.USER,LOGNAME:base.LOGNAME,LANG:'C',LC_ALL:'C',PATH:env.PATH,
-  PRODUCT_GIT_BIN:env.GIT};
+ const testEnvironment={HOME:work,USER:base.USER,LOGNAME:base.LOGNAME,LANG:'C',LC_ALL:'C',PATH:env.PATH};
  const files=testFiles().map(file=>join(root,file));
  for(const file of files){const info=lstatSync(file);if(!info.isFile()||info.isSymbolicLink()||realpathSync(file)!==file)throw Error('本仓测试文件无效');}
  const digests=files.map(file=>createHash('sha256').update(readFileSync(file)).digest('hex'));
@@ -451,7 +437,7 @@ export async function execute(platform,work,request={},options={}) {
    ||environment.GITHUB_EVENT_NAME!=='workflow_dispatch'||environment.GITHUB_REF!=='refs/heads/main'
    ||environment.GITHUB_WORKFLOW_REF!==environment.GITHUB_REPOSITORY+'/.github/workflows/'+workflow+'@refs/heads/main'
    ||!/^[a-f0-9]{40}$/u.test(environment.GITHUB_SHA||'')
-   ||spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout?.trim()!==environment.GITHUB_SHA)
+   ||checkoutSHA()!==environment.GITHUB_SHA)
    fail('GitHub正式编译消费身份无效');
  }
  checkFixedWork(work,{create:true});
@@ -584,7 +570,7 @@ const {fixedScratch,trackWorkProcess,workEnvironment,checkScratchPath}=targetRun
 const {AsyncLocalStorage}=await import('node:async_hooks');
 const {writeFileSync:writeGroupRecord,existsSync,readFileSync,constants}=await import('node:fs');
 const {createHash,randomUUID}=await import('node:crypto');
-const {lstat,realpath,readdir,readlink,symlink,copyFile,readFile,writeFile,mkdir,mkdtemp,rename,rm:removeResourcePath,chmod,open,utimes}=await import('node:fs/promises');
+const {lstat,realpath,readdir,readlink,symlink,copyFile,readFile,writeFile,mkdir,mkdtemp,rename,rm:removeResourcePath,chmod,open}=await import('node:fs/promises');
 const {dirname,join,resolve,relative,isAbsolute,sep,parse,win32,posix}=await import('node:path');
 const {fileURLToPath,pathToFileURL}=await import('node:url');
 const {homedir}=await import('node:os');
@@ -593,7 +579,6 @@ const {spawn}=await import('node:child_process');
 const {createRequire}=await import('node:module');
 const supplyGroups=new Map();
 const resourceSupplies=new AsyncLocalStorage();
-const exec=runResourceProcess,execute=exec;
 // 工具返回只在主进程和整组后代退出后完成；未确认的输入目录禁止后续清理或改权限。
 const retainedResourceRoots=new Set();
 function retainedResourcePath(path) {
@@ -741,465 +726,34 @@ async function acquireArchive(entry,{store,work,optional,offline=false,fetcher=f
  const temporary=join(await resourceWork(work),'.'+coordinate+'.'+randomUUID()+'.pending'),h=await open(temporary,'wx',0o600);let bytes=0;const [algorithm,digest]=digestSpec(entry),checksum=createHash(algorithm);
  try{for await(const chunk of response.body){signal?.throwIfAborted();bytes+=chunk.length;if(bytes>maxBytes)fail('来源数据超限');checksum.update(chunk);let offset=0;while(offset<chunk.length){const n=await h.write(chunk,offset,chunk.length-offset);if(!n.bytesWritten)fail('原件写入中断');offset+=n.bytesWritten;}}if(!bytes||!checksum.digest().equals(digest))fail('锁定来源摘要不符');if(length&&length!==bytes)fail('来源数据不完整');await h.sync();await h.close();signal?.throwIfAborted();await chmod(temporary,0o444);await commitCandidate(temporary,target,{signal,verify:check});return await check(target);}finally{await h.close().catch(()=>{});await rm(temporary,{force:true});await response.body?.cancel().catch(()=>{});}
 }
-async function downloadTool(entry,target,options){const archive=await acquireArchive(entry,{...options,store:options.store||dirname(target)});await copyFile(archive,target,constants.COPYFILE_EXCL);}
 // 解包先解析全部成员并验证闭包，之后才写入；链接不得指向归档外部或成为文件父目录。
 async function extractArchive(input,destination,{prefix='',signal,tar,maxBytes=8*1024**3}={}){
  await regular(input);if(await stat(destination))fail('解包目标已存在');let bytes=await readFile(input),entries=[];const seen=new Set();
- const add=(path,type,data,mode=0o644,target,mtime=null)=>{path=path.replace(/\/$/u,'').replace(/^\.\//u,'');if(path==='.'||!path)return;if(!safePath(path))fail('归档成员越界');if(entries.length>=400000||seen.has(path))fail('归档成员重复或超限');seen.add(path);entries.push({path,type,data,mode,target,mtime});};
+ const add=(path,type,data,mode=0o644,target)=>{path=path.replace(/\/$/u,'').replace(/^\.\//u,'');if(path==='.'||!path)return;if(!safePath(path))fail('归档成员越界');if(entries.length>=400000||seen.has(path))fail('归档成员重复或超限');seen.add(path);entries.push({path,type,data,mode,target});};
  if(bytes[0]===0x50&&bytes[1]===0x4b){let end=-1;for(let i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--)if(bytes.readUInt32LE(i)===0x06054b50){end=i;break;}if(end<0)fail('ZIP目录缺失');const count=bytes.readUInt16LE(end+10);let cursor=bytes.readUInt32LE(end+16),total=0;for(let n=0;n<count;n++){signal?.throwIfAborted();if(bytes.readUInt32LE(cursor)!==0x02014b50)fail('ZIP成员无效');const method=bytes.readUInt16LE(cursor+10),size=bytes.readUInt32LE(cursor+24),compressed=bytes.readUInt32LE(cursor+20),nameLength=bytes.readUInt16LE(cursor+28),extra=bytes.readUInt16LE(cursor+30),comment=bytes.readUInt16LE(cursor+32),mode=bytes.readUInt32LE(cursor+38)>>>16,offset=bytes.readUInt32LE(cursor+42),name=bytes.subarray(cursor+46,cursor+46+nameLength).toString('utf8');if(bytes.readUInt16LE(cursor+8)&1||size===0xffffffff||offset===0xffffffff)fail('ZIP加密或Zip64未声明');total+=size;if(total>maxBytes)fail('ZIP解压超限');if(bytes.readUInt32LE(offset)!==0x04034b50)fail('ZIP本地记录无效');const start=offset+30+bytes.readUInt16LE(offset+26)+bytes.readUInt16LE(offset+28),data=bytes.subarray(start,start+compressed),output=method===0?data:method===8?inflateRawSync(data,{maxOutputLength:Math.max(1,size)}):fail('ZIP压缩方式未声明');if(output.length!==size)fail('ZIP长度不符');add(name,name.endsWith('/')?'directory':(mode&0o170000)===0o120000?'symlink':'file',output,mode||0o644,output.toString());cursor+=46+nameLength+extra+comment;}}
  else{if(bytes[0]===0x1f&&bytes[1]===0x8b)bytes=gunzipSync(bytes,{maxOutputLength:maxBytes});else if(bytes[0]===0xfd&&bytes[1]===0x37){if(!tar)fail('XZ需要已验真基础归档工具');fail('XZ应通过受控tar清单提取');}
   const number=b=>{const v=b.toString().replace(/\0.*$/su,'').trim();if(!/^[0-7]*$/u.test(v))fail('TAR数字无效');return parseInt(v||'0',8);};let pax={},global={};
   for(let cursor=0;cursor+512<=bytes.length;){signal?.throwIfAborted();const block=bytes.subarray(cursor,cursor+512);if(block.every(x=>x===0))break;let sum=0;for(let i=0;i<512;i++)sum+=(i>=148&&i<156)?32:block[i];if(sum!==number(block.subarray(148,156)))fail('TAR头摘要不符');const size=number(block.subarray(124,136)),type=String.fromCharCode(block[156]||48),str=(a,b)=>block.subarray(a,b).toString().replace(/\0.*$/su,''),data=bytes.subarray(cursor+512,cursor+512+size);if(data.length!==size||size>maxBytes)fail('TAR内容超限');cursor+=512+Math.ceil(size/512)*512;
    if(type==='x'||type==='g'){const values={};let at=0;while(at<data.length){const space=data.indexOf(32,at),length=Number(data.subarray(at,space).toString());if(!Number.isInteger(length)||length<=space-at+1||at+length>data.length)fail('PAX长度无效');const record=data.subarray(space+1,at+length-1).toString(),eq=record.indexOf('=');if(eq<1)fail('PAX字段无效');values[record.slice(0,eq)]=record.slice(eq+1);at+=length;}if(type==='g')global={...global,...values};else pax=values;continue;}
    if(type==='L'){pax.path=data.toString().replace(/\0.*$/su,'');continue;}if(type==='K'){pax.linkpath=data.toString().replace(/\0.*$/su,'');continue;}
-   const attrs={...global,...pax};pax={};if(Object.keys(attrs).some(x=>x.startsWith('GNU.sparse')))fail('TAR稀疏文件未声明');const name=attrs.path||[str(345,500),str(0,100)].filter(Boolean).join('/'),target=attrs.linkpath||str(157,257),mtime=attrs.mtime===undefined?number(block.subarray(136,148)):Number(attrs.mtime);if(!Number.isFinite(mtime)||mtime<0||mtime>4102444800)fail('TAR时间越界');if(!['0','5','2','1'].includes(type))fail('TAR特殊成员未声明');add(name,{'0':'file','5':'directory','2':'symlink','1':'hardlink'}[type],data,number(block.subarray(100,108)),target,mtime);
+   const attrs={...global,...pax};pax={};if(Object.keys(attrs).some(x=>x.startsWith('GNU.sparse')))fail('TAR稀疏文件未声明');const name=attrs.path||[str(345,500),str(0,100)].filter(Boolean).join('/'),target=attrs.linkpath||str(157,257);if(!['0','5','2','1'].includes(type))fail('TAR特殊成员未声明');add(name,{'0':'file','5':'directory','2':'symlink','1':'hardlink'}[type],data,number(block.subarray(100,108)),target);
   }
  }
  const selected=entries.filter(e=>!prefix||e.path===prefix||e.path.startsWith(prefix+'/')).map(e=>({...e,path:prefix?e.path.slice(prefix.length).replace(/^\//u,''):e.path})).filter(e=>e.path);if(!selected.length)fail('归档根缺失');const table=new Map(selected.map(e=>[e.path,e]));
  for(const entry of selected){let parent=dirname(entry.path);while(parent!=='.'){if(table.has(parent)&&table.get(parent).type!=='directory')fail('归档父目录不是目录');parent=dirname(parent);}if(['symlink','hardlink'].includes(entry.type)){const target=entry.type==='symlink'?posix.normalize(posix.join(posix.dirname(entry.path),entry.target)):prefix?entry.target.replace(new RegExp('^'+prefix+'/'),''):entry.target;if(!safePath(target)||!table.has(target))fail('归档链接越界或缺失');entry.resolved=target;}}
- await mkdir(destination,{mode:0o700});try{for(const entry of selected.filter(x=>['file','directory'].includes(x.type))){signal?.throwIfAborted();const file=join(destination,entry.path);await mkdir(dirname(file),{recursive:true,mode:0o700});if(entry.type==='directory')await mkdir(file,{recursive:true,mode:0o700});else{await writeFile(file,entry.data,{flag:'wx',mode:entry.mode&0o111?0o755:0o644});if(entry.mtime!==null)await utimes(file,entry.mtime,entry.mtime);}}
- for(const entry of selected.filter(x=>['symlink','hardlink'].includes(x.type))){signal?.throwIfAborted();const file=join(destination,entry.path);await mkdir(dirname(file),{recursive:true});if(entry.type==='hardlink'){const source=table.get(entry.resolved);if(source.type!=='file')fail('硬链接目标不是普通文件');await copyFile(join(destination,entry.resolved),file,constants.COPYFILE_EXCL);if(entry.mtime!==null)await utimes(file,entry.mtime,entry.mtime);}else await symlink(entry.target,file);}await inventory(destination);return destination;}catch(e){await permissions(destination,true);await rm(destination,{recursive:true});throw e;}
+ await mkdir(destination,{mode:0o700});try{for(const entry of selected.filter(x=>['file','directory'].includes(x.type))){signal?.throwIfAborted();const file=join(destination,entry.path);await mkdir(dirname(file),{recursive:true,mode:0o700});if(entry.type==='directory')await mkdir(file,{recursive:true,mode:0o700});else await writeFile(file,entry.data,{flag:'wx',mode:entry.mode&0o111?0o755:0o644});}
+ for(const entry of selected.filter(x=>['symlink','hardlink'].includes(x.type))){signal?.throwIfAborted();const file=join(destination,entry.path);await mkdir(dirname(file),{recursive:true});if(entry.type==='hardlink'){const source=table.get(entry.resolved);if(source.type!=='file')fail('硬链接目标不是普通文件');await copyFile(join(destination,entry.resolved),file,constants.COPYFILE_EXCL);}else await symlink(entry.target,file);}await inventory(destination);return destination;}catch(e){await permissions(destination,true);await rm(destination,{recursive:true});throw e;}
 }
 // XZ由验真POSIX tar处理；双遍清单、无链接父目录与候选物化后的清单一起保护边界。
-async function unpack(input,target,{prefix='',signal,foundation}={}){const b=await readFile(input);if(!(b[0]===0xfd&&b[1]===0x37))return extractArchive(input,target,{prefix,signal});const tar=foundation?.tools.tar;if(!tar)fail('XZ缺少已验真tar');const list=await exec(tar,['-tvf',input],{signal,maxBuffer:32*1024**2});if(list.stdout.split('\n').filter(Boolean).some(x=>!/^[-d]/u.test(x)))fail('XZ成员含链接或特殊项');const names=(await exec(tar,['-tf',input],{signal,maxBuffer:32*1024**2})).stdout.split('\n').filter(Boolean);if(names.some(x=>!safePath(x.replace(/\/$/u,'').replace(/^\.\//u,''))))fail('XZ成员越界');await mkdir(target);await exec(tar,['-xkf',input,'--no-same-owner','-C',target],{signal,maxBuffer:2*1024**2});await inventory(target);if(prefix){const child=join(target,prefix),temporary=target+'.root';await directory(child);await rename(child,temporary);await permissions(target,true);await rm(target,{recursive:true});await rename(temporary,target);}return target;}
-// 本仓准确工具配方；外部供给登记不能改变这些版本和来源。
-const posixRecipe=(()=>{
-
-// 只采集官方macOS发行件中的基础入口；不纳入Git/Python/Ruby等独立登记工具。
-const posixNames = Object.freeze([
-  'sh', 'bash', 'tar', 'awk', 'sed', 'grep', 'cat', 'chmod', 'cp', 'cut', 'dirname',
-  'echo', 'env', 'expr', 'false', 'find', 'head', 'install', 'ln', 'ls', 'mkdir',
-  'mktemp', 'mv', 'od', 'paste', 'pwd', 'readlink', 'rm', 'rmdir', 'sleep', 'sort',
-  'tail', 'tee', 'test', 'touch', 'tr', 'true', 'uname', 'uniq', 'wc', 'xargs',
-  'basename', 'printf', 'date', 'cmp', 'comm', 'dd', 'df', 'du', 'hostname',
-  'whoami', 'file', 'stat', 'zip', 'unzip', 'plutil', 'ditto', 'rsync', 'patch',
-  'sw_vers', 'chflags', 'cpio', 'gzip', 'gunzip', 'bzip2', 'egrep', 'fgrep',
-  'open', 'pgrep', 'pkill', 'lsof', 'zsh', 'ps', 'kill', 'diff', 'yes', 'realpath',
-  'which', 'sysctl',
-]);
-const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-const fail = message => { throw new Error('受控POSIX工具：' + message); };
-
-function validatePosixTool(tool) {
-  if (tool?.id !== 'posix' || tool.command !== 'bash' || !tool.managed
-    || !/^\d+\.\d+(?:\.\d+)?$/u.test(tool.version)
-    || tool.source !== 'https://opensource.apple.com/'
-    || JSON.stringify(tool.requires) !== JSON.stringify(['node', 'xcode'])
-    || tool.archive?.kind !== 'apple-posix'
-    || tool.archive.url !== tool.source || tool.archive.root !== 'macos-posix-' + tool.version
-    || tool.archive.executable !== 'bin/bash' || !/^[a-f0-9]{64}$/u.test(tool.archive.sha256)
-    || tool.dependencies || tool.components || tool.archives) fail('官方发行件登记不完整');
-}
-
-// 本机基础工具从已声明的系统位置取得实际入口。
-async function locatePosixSources({signal,platform=process.platform}={}){
- if(platform!=='darwin')fail('仅限已授权macOS自举');
- const files=[];
- for(const name of posixNames){signal?.throwIfAborted();const entry=['/bin/','/usr/bin/','/usr/sbin/'].map(prefix=>prefix+name).find(existsSync);if(!entry)fail('缺少官方基础入口：'+name);const path=await realpath(entry),info=await lstat(path);if(!info.isFile()||!(info.mode&0o111))fail('系统输入不是普通可执行文件');files.push({name,path});}
- return files;
-}
-
-// 采集不是常态回退：只有本次明确授权的bootstrap调用可建立候选，发布仍由工具事务完成。
-async function buildPosixTool({ tool, payload, bootstrap = false, run, signal }) {
-  validatePosixTool(tool);
-  if (bootstrap !== true) fail('缺少本次首次自举授权');
-  const files = await locatePosixSources({signal});
-  await mkdir(payload); await mkdir(join(payload, 'bin'));
-  for (const file of files) {
-    const target = join(payload, 'bin', file.name);
-    await copyFile(file.path, target);
-    // 系统原签名带平台限制；候选建立本机运行签名。
-    await run('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', target],
-      { signal, timeout: 60000, env: { PATH: '', LANG: 'C' } });
-  }
-  // 发布前真实执行文件与归档；只接受同对象内的sysctl。
-  const bin = join(payload, 'bin'), probe = join(payload, '.probe');
-  await mkdir(probe);
-  try {
-    const result = await run(join(bin, 'bash'), ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c',
-      'printf "controlled-posix-ok\\n" > input; cp input copy; cmp input copy; awk "{print}" copy | sed -n "1p"; tar -cf check.tar input; tar -tf check.tar; which sysctl; sysctl -n hw.optional.arm64; if which citizen-tool-not-installed > /dev/null 2>&1; then exit 1; fi'],
-      { cwd: probe, signal, timeout: 60000, env: { PATH: bin, LANG: 'C' } });
-    if (result.stdout !== 'controlled-posix-ok\ninput\n' + join(bin, 'sysctl') + '\n1\n') fail('基础工具真实执行回读不符');
-  } finally { await rm(probe, {recursive:true,force:true}); }
-}
-
-// 调用方只取得同一只读对象内入口；缺失立即失败，绝不从系统或PATH补齐。
-async function controlledPosixTools(library, verify) {
-  const tool = library.tools.find(entry => entry.id === 'posix');
-  if (!tool) fail('基础工具未登记');
-  validatePosixTool(tool);
-  const installed = await verify(library, tool);
-  if (!installed) fail('请先安装已登记基础工具原件');
-  const bin = dirname(installed.path), tools = {};
-  for (const name of posixNames) {
-    const path = join(bin, name), info = await lstat(path);
-    if (!info.isFile() || !(info.mode & 0o111) || await realpath(path) !== path) fail('受控入口失效：' + name);
-    tools[name] = path;
-  }
-  return { bin, tools };
-}
-return {posixNames,buildPosixTool,controlledPosixTools};})();
-const sourceRecipe=(()=>{
-const controlledPosixTools=(...args)=>productFoundation(...args);
-
-const fail = message => { throw new Error('官方源码工具：' + message); };
-const plain = (value, fields) => value && typeof value === 'object' && !Array.isArray(value)
-  && Object.keys(value).sort().join(',') === [...fields].sort().join(',');
-const hash = value => createHash('sha256').update(value).digest('hex');
-const sources = Object.freeze({
-  bash: version => { const base=version.split('.').slice(0,2).join('.');return ['https://ftp.gnu.org/gnu/bash/bash-'+base+'.tar.gz','bash-'+base,'bin/bash']; },
-  grep: version => ['https://ftp.gnu.org/gnu/grep/grep-' + version + '.tar.xz', 'grep-' + version, 'bin/grep'],
-  sed: version => ['https://ftp.gnu.org/gnu/sed/sed-' + version + '.tar.xz', 'sed-' + version, 'bin/sed'],
-  m4: version => ['https://ftp.gnu.org/gnu/m4/m4-' + version + '.tar.xz', 'm4-' + version, 'bin/m4'],
-  bison: version => ['https://ftp.gnu.org/gnu/bison/bison-' + version + '.tar.xz', 'bison-' + version, 'bin/bison'],
-  flex: version => ['https://github.com/westes/flex/releases/download/v' + version + '/flex-' + version + '.tar.gz', 'flex-' + version, 'bin/flex'],
-  gettext: version => ['https://ftp.gnu.org/gnu/gettext/gettext-' + version + '.tar.gz', 'gettext-' + version, 'bin/msgfmt'],
-  git: version => ['https://www.kernel.org/pub/software/scm/git/git-' + version + '.tar.xz', 'git-' + version, 'bin/git'],
-  python: version => ['https://www.python.org/ftp/python/' + version + '/Python-' + version + '.tar.xz', 'Python-' + version, 'bin/python' + version.split('.').slice(0, 2).join('.')],
-  perl: version => ['https://www.cpan.org/src/5.0/perl-' + version + '.tar.xz', 'perl-' + version, 'bin/perl'],
-  openssl: version => ['https://github.com/openssl/openssl/releases/download/openssl-' + version + '/openssl-' + version + '.tar.gz', 'openssl-' + version, 'bin/openssl'],
-});
-const requirements = Object.freeze({
-  bash: ['node', 'xcode', 'posix'], grep: ['node', 'xcode', 'posix'], sed: ['node', 'xcode', 'posix'],
-  git: ['node', 'xcode', 'perl', 'python', 'gettext'], python: ['node', 'xcode', 'openssl'],
-  m4: ['node', 'xcode'], bison: ['node', 'xcode', 'm4'], flex: ['node', 'xcode', 'm4', 'bison'],
-  gettext: ['node', 'xcode', 'perl', 'm4', 'bison', 'flex'],
-  perl: ['node', 'xcode'], openssl: ['node', 'xcode', 'perl'],
-});
-
-// 来源、归档根、执行入口和前置对象形成闭集；运行时绝不解析latest或系统同名命令。
-function validateSourceTool(tool) {
-  const expected = sources[tool?.id]?.(tool.version);
-  if (!expected || !tool.managed || !/^\d+\.\d+(?:\.\d+)?$/u.test(tool.version)
-    || JSON.stringify(tool.requires) !== JSON.stringify(requirements[tool.id])
-    || tool.archive?.kind !== 'native-source'
-    || JSON.stringify([tool.archive.url, tool.archive.root, tool.archive.executable]) !== JSON.stringify(expected)
-    || !/^[a-f0-9]{64}$/u.test(tool.archive.sha256)) fail('官方固定归档或工具前置关系不符');
-  const patches = tool.upstream_patches ?? [];
-  if (!Array.isArray(patches) || tool.id === 'bash' && patches.length !== Number(tool.version.split('.')[2]||0)
-    || tool.id !== 'bash' && patches.length) fail('官方源码补丁闭包不符');
-  for (const [i, patch] of patches.entries()) {
-    if (!plain(patch, ['url', 'sha256']) || !/^[a-f0-9]{64}$/u.test(patch.sha256)
-      || patch.url !== 'https://ftp.gnu.org/gnu/bash/bash-'+tool.version.split('.').slice(0,2).join('.')+'-patches/bash'+tool.version.split('.').slice(0,2).join('')+'-' + String(i + 1).padStart(3, '0')) fail('官方Bash补丁顺序或坐标不符');
-  }
-  const dependencies = tool.dependencies ?? [];
-  if (!Array.isArray(dependencies) || new Set(dependencies.map(entry => entry.name)).size !== dependencies.length) fail('依赖身份重复');
-  for (const entry of dependencies) {
-    if (tool.id === 'python') {
-      if (!plain(entry, ['name', 'version', 'url', 'sha256', 'root']) || entry.name !== 'xz'
-        || !/^\d+\.\d+\.\d+$/u.test(entry.version)
-        || entry.url !== 'https://github.com/tukaani-project/xz/releases/download/v'+entry.version+'/xz-'+entry.version+'.tar.xz'
-        || entry.root !== 'xz-'+entry.version) fail('Python LZMA依赖来源不符');
-    } else fail('该工具没有独立外部源码依赖');
-    if (!/^[a-f0-9]{64}$/u.test(entry.sha256)) fail('源码依赖摘要缺失');
-  }
-  if (tool.id === 'python' && dependencies.length !== 1) {
-    fail('工具运行依赖闭包不完整');
-  }
-  return true;
-}
-
-// Perl实际安装目录只来自本轮官方Configure输出，不猜版本目录或架构名称。
-function perlRuntimeLibraries(config, finalPayload, payload) {
-  const paths=['installprivlib','installarchlib'].map(name=>{
-    const values=[...config.matchAll(new RegExp('^'+name+"='([^']*)'$",'gm'))];
-    const value=values.length===1?values[0][1]:null;
-    if(!value || !value.startsWith(finalPayload+'/') || value!==resolve(value)
-      || /[\x00-\x1f]/u.test(value)) fail('Perl官方安装目录声明无效：'+name);
-    return join(payload,relative(finalPayload,value));
-  });
-  if(new Set(paths).size!==2) fail('Perl普通与架构运行库必须准确隔离');
-  return paths;
-}
-
-async function directory(path) {
-  if (!isAbsolute(path) || path !== resolve(path) || await realpath(path) !== path
-    || !(await lstat(path)).isDirectory()) fail('候选目录必须是规范真实目录');
-}
-async function regular(path, executable = false) {
-  const info = await lstat(path);
-  if (!info.isFile() || info.isSymbolicLink() || !info.size
-    || await realpath(path) !== path || executable && !(info.mode & 0o111)) fail('输入或输出必须是准确普通文件');
-}
-
-// 只有此工具对象的候选目录可写；最终前缀固定到已登记摘要，DESTDIR收集后才原子发布。
-async function buildSourceTool({ library, tool, source, archive, pending, payload,
-  finalPayload, signal, fetcher, exec, verify, apple, bootstrap = false, environment = process.env,
-  prepare = prepareSourceDependencies, download = downloadTool }) {
-  validateSourceTool(tool);
-  const expected = library.pending;
-  if (pending !== expected || payload !== join(pending, 'payload')
-    || finalPayload !== library.finalPayload
-    || archive !== join(pending, 'archive')
-    || source !== (tool.archive.kind === 'gem' ? archive : join(pending, 'unpack', tool.archive.root))) fail('候选对象身份不符');
-  await directory(pending); await regular(archive);
-  if (hash(await readFile(archive)) !== tool.archive.sha256) fail('完整官方归档摘要不符');
-  if (tool.archive.kind !== 'gem') await directory(source);
-  const installed = {};
-  for (const id of tool.requires) {
-    const registered = library.tools.find(entry => entry.id === id);
-    const result = registered && await verify(library, registered);
-    if (!result) fail('缺少已验真前置工具：' + id);
-    installed[id] = result.path;
-  }
-  const foundation = await controlledPosixTools(library, verify, { bootstrap, id: tool.id });
-  const selected = await apple(library, { names: ['clang', 'clang++', 'ar', 'make', 'ld', 'nm', 'ranlib', 'strip', 'xcrun', 'otool', 'install_name_tool', 'codesign'], signal });
-  const sdkResult = await exec(selected.tools.xcrun, ['--sdk', 'macosx', '--show-sdk-path'], {
-    env: { PATH: '', DEVELOPER_DIR: selected.developerDirectory }, signal, timeout: 60_000,
-  });
-  // xcrun返回包内官方SDK链接；固定到同一包内真实目标，不接纳包外SDK。
-  const sdkInput = sdkResult.stdout.trim();
-  if (!isAbsolute(sdkInput) || sdkInput !== resolve(sdkInput)) fail('SDK返回路径无效');
-  const sdk = await realpath(sdkInput); await directory(sdk);
-  if (!sdk.startsWith(selected.developerDirectory + '/')) fail('SDK不属于同一Xcode');
-  const work = join(pending, 'probe'), stage = join(work, 'stage');
-  await mkdir(work); await mkdir(stage);
-  const env = { ...environment, HOME: work, TMPDIR: work, DEVELOPER_DIR: selected.developerDirectory,
-    SDKROOT: sdk, MACOSX_DEPLOYMENT_TARGET: library.tools.find(entry=>entry.id==='posix').version,
-    PATH: [...new Set([...Object.values(installed).map(dirname), foundation.path,
-      dirname(selected.tools.clang), dirname(selected.tools.make)])].join(':'),
-    // Clang自带汇编器，避免调用带系统解释器shebang的Xcode as脚本。
-    CC: selected.tools.clang, CXX: selected.tools['clang++'], AR: selected.tools.ar,
-    CPP: selected.tools.clang + ' -E', LD: selected.tools.ld, AS: selected.tools.clang,
-    NM: selected.tools.nm, RANLIB: selected.tools.ranlib, STRIP: selected.tools.strip,
-    MAKE: selected.tools.make, PERL: installed.perl ?? '', PYTHON: installed.python ?? '',
-    MAKEINFO: 'true', HELP2MAN: 'true', M4: installed.m4 ?? 'false', BISON: installed.bison ?? 'false',
-    YACC: installed.bison ? installed.bison + ' -y' : 'false', FLEX: installed.flex ?? 'false',
-    // 官方AC_PROG_LEX用冒号表示未安装Lex，false会误入必须生成扫描器的探测。
-    LEX: installed.flex ?? ':', COCOAPODS_DISABLE_STATS: 'true',
-  };
-  for (const key of Object.keys(env)) if (key.startsWith('DYLD_') || ['NODE_OPTIONS', 'NODE_PATH', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH', 'GLOBIGNORE',
-    'PYTHONHOME', 'PYTHONPATH', 'RUBYOPT', 'RUBYLIB', 'GEM_HOME', 'GEM_PATH', 'PERL5OPT', 'PERL5LIB',
-    'ARCHFLAGS', 'ARCH', 'CC_FOR_BUILD', 'CXX_FOR_BUILD', 'CROSS_COMPILE', 'LD_PRELOAD', 'LD_LIBRARY_PATH',
-    'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'CPATH', 'LIBRARY_PATH', 'PKG_CONFIG_PATH', 'CONFIG_SITE', 'GNUMAKEFLAGS', 'MAKEFLAGS', 'MFLAGS',
-    'DESTDIR', 'LD_RUN_PATH', 'CMAKE_TOOLCHAIN_FILE', 'npm_execpath', 'npm_node_execpath', 'NVM_BIN', 'NVM_DIR'].includes(key)) delete env[key];
-  // 已验真SDK通过SDKROOT传给Clang，避免Configure把嵌入引号当作路径字节。
-  env.CFLAGS = '-O2';
-  env.CXXFLAGS = env.CFLAGS;
-  env.LDFLAGS = '-Wl,-headerpad_max_install_names';
-  env.ARCHFLAGS = '-arch arm64';
-  env.SHELL = foundation.tools.sh;
-  env.CONFIG_SHELL = foundation.tools.sh;
-  env.M4PATH = '';
-  env.BISON_PKGDATADIR = installed.bison ? join(dirname(dirname(installed.bison)), 'share/bison') : '';
-  env.PKG_CONFIG = 'false';
-  env.PKG_CONFIG_LIBDIR = '';
-  env.CONFIG_SITE = '';
-  const run = (command, args, cwd = source, extra = {}) => exec(command, args, {
-    cwd, env: { ...env, ...extra }, signal, timeout: 3_600_000, maxBuffer: 8 * 1024 * 1024,
-  });
-  const originals = await prepare({ library, tool, pending, environment: env, signal, fetcher });
-  const upstream = [];
-  for (const [i, patch] of (tool.upstream_patches ?? []).entries()) {
-    const file = join(pending, 'bash53-' + String(i + 1).padStart(3, '0'));
-
-    await download(patch, file, { fetcher, signal });
-    await regular(file);
-    if (hash(await readFile(file)) !== patch.sha256) fail('Bash官方补丁原件摘要不符');
-    await run(foundation.tools.patch, ['--batch', '--forward', '--fuzz=0', '-p0', '-i', file]);
-    upstream.push(file);
-  }
-  {
-    let flags = ['--prefix=' + finalPayload];
-    if (tool.id === 'python') {
-      // Xcode SDK不提供lzma头文件；仅编译已锁官方liblzma静态库，不借用户或系统缓存。
-      const archiveDirectory = join(work, 'xz'); await mkdir(archiveDirectory);
-      await run(foundation.tools.tar, ['-xkf', originals.get('xz'), '--no-same-owner', '-C', archiveDirectory], work);
-      const root = join(archiveDirectory, tool.dependencies[0].root); await directory(root);
-      const prefix = join(work, 'liblzma');
-      await run(foundation.tools.sh, [join(root, 'configure'), '--prefix=' + prefix,
-        '--disable-shared', '--enable-static', '--with-pic', '--disable-xz', '--disable-xzdec',
-        '--disable-lzmadec', '--disable-lzmainfo', '--disable-scripts', '--disable-doc', '--disable-nls'], root);
-      await run(selected.tools.make, ['-j8', 'SHELL=' + foundation.tools.sh], root);
-      await run(selected.tools.make, ['install', 'SHELL=' + foundation.tools.sh], root);
-      await regular(join(prefix, 'include/lzma.h')); await regular(join(prefix, 'lib/liblzma.a'));
-      // Python官方configure支持这两个边界变量；静态链接不携带候选运行库路径。
-      env.LIBLZMA_CFLAGS = '-I' + join(prefix, 'include');
-      env.LIBLZMA_LIBS = join(prefix, 'lib/liblzma.a');
-    }
-    if (['bison', 'flex', 'bash', 'grep', 'sed'].includes(tool.id)) flags.push('--disable-nls');
-    if (tool.id === 'bash') flags.push('--without-bash-malloc');
-    if (tool.id === 'grep') flags.push('--disable-perl-regexp');
-    // libfl的yylex由消费者扫描器提供；macOS交付静态库，避免共享库链接未定义符号。
-    if (tool.id === 'flex') flags.push('--disable-shared');
-    if (tool.id === 'gettext') flags.push('--disable-shared', '--disable-java', '--disable-csharp', '--without-emacs');
-    if (tool.id === 'python') flags.push('--with-openssl=' + dirname(dirname(installed.openssl)), '--with-openssl-rpath=auto');
-    if (tool.id === 'perl') {
-      await run(foundation.tools.sh, [join(source, 'Configure'), '-des', '-Dprefix=' + finalPayload,
-        '-Dcc=' + selected.tools.clang, '-Dld=' + selected.tools.clang, '-Dar=' + selected.tools.ar,
-        '-Duseshrplib', '-Dinstallusrbinperl=n', '-Dccflags=' + env.CFLAGS,
-        '-Dldflags=' + env.LDFLAGS, '-Dman1dir=none', '-Dman3dir=none']);
-    } else if (tool.id === 'openssl') {
-      await run(installed.perl, [join(source, 'Configure'), 'darwin64-arm64-cc', '--prefix=' + finalPayload,
-        '--openssldir=/private/etc/ssl', 'no-shared']);
-    } else if (tool.id !== 'git') await run(foundation.tools.sh, [join(source, 'configure'), ...flags]);
-    let curlLibrary;
-    if (tool.id === 'git') {
-      // 官方Makefile允许显式交付CURL输入；固定同一Xcode SDK，不执行未登记curl-config。
-      await regular(join(sdk, 'usr/include/curl/curl.h'));
-      // Apple SDK的libcurl.tbd是官方链接；只接受同一SDK目录内的真实普通目标。
-      curlLibrary = await realpath(join(sdk, 'usr/lib/libcurl.tbd'));
-      if (!curlLibrary.startsWith(sdk + '/usr/lib/')) fail('CURL链接输入不属于同一SDK');
-      await regular(curlLibrary);
-    }
-    const makeArgs = tool.id === 'git' ? ['prefix=' + finalPayload,
-      'CURL_CFLAGS=-I' + join(sdk, 'usr/include'), 'CURL_LDFLAGS=' + curlLibrary,
-      'NO_FINK=YesPlease', 'NO_DARWIN_PORTS=YesPlease', 'NO_HOMEBREW=YesPlease',
-      'GETTEXT_PATH=' + join(dirname(installed.gettext), 'gettext'), 'CPPFLAGS=-I' + dirname(dirname(installed.gettext)) + '/include',
-      'LDFLAGS=' + env.LDFLAGS + ' -L' + dirname(dirname(installed.gettext)) + '/lib', 'NO_TCLTK=YesPlease', 'PERL_PATH=' + installed.perl, 'PYTHON_PATH=' + installed.python,
-      'CC=' + selected.tools.clang, 'AR=' + selected.tools.ar, 'SHELL_PATH=' + foundation.tools.sh, 'SHELL=' + foundation.tools.sh] : ['SHELL=' + foundation.tools.sh];
-    await run(selected.tools.make, ['-j8', ...makeArgs]);
-    await run(selected.tools.make, ['DESTDIR=' + stage, ...makeArgs,
-      tool.id === 'openssl' ? 'install_sw' : 'install']);
-    const staged = join(stage, finalPayload.slice(1)); await directory(staged);
-    await rename(staged, payload);
-  }
-  await regular(join(payload, tool.archive.executable), true);
-  if (tool.id === 'grep') for (const name of ['egrep', 'fgrep']) {
-    const alias = join(payload, 'bin', name);
-    const info = await lstat(alias).catch(error => {if (error.code !== 'ENOENT') throw error; return null;});
-    if (info) {if (!info.isFile() || info.isSymbolicLink()) fail('上游grep别名不是普通脚本');await rm(alias);}
-  }
-  if (tool.id === 'bash') {
-    // sh是同一个Bash产物的准确普通副本，版本与回执同属唯一工具对象。
-    await writeFile(join(payload, 'bin/sh'), await readFile(join(payload, 'bin/bash')), { flag: 'wx', mode: 0o555 });
-  }
-  if (tool.archive.kind === 'native-source') {
-    const walk = async path => {
-      const result = [];
-      for (const entry of await readdir(path, { withFileTypes: true })) {
-        const file = join(path, entry.name);
-        if (entry.isDirectory()) result.push(...await walk(file));
-        else if (entry.isFile()) result.push(file);
-        else if (!entry.isSymbolicLink()) fail('工具输出包含特殊文件');
-      }
-      return result;
-    };
-    const binaries = [];
-    for (const file of await walk(payload)) {
-      const bytes = await readFile(file);
-      if (bytes.length >= 32 && bytes.readUInt32LE(0) === 0xfeedfacf) {
-        if (bytes.readUInt32LE(4) !== 0x0100000c) fail('源码工具Mach-O架构不是ARM64');
-        binaries.push(file);
-      }
-    }
-    if (!binaries.includes(join(payload, tool.archive.executable))) fail('编译没有生成ARM64工具入口');
-    const relocated = new Set();
-    for (const file of binaries) {
-      const identity = await lstat(file), key = identity.dev + ':' + identity.ino;
-      if (relocated.has(key)) continue;
-      relocated.add(key);
-      const listing = await run(selected.tools.otool, ['-L', file], work);
-      let ownRuntime = false;
-      for (const line of listing.stdout.split('\n').slice(1)) {
-        const dependency = line.trim().split(' (')[0];
-        if (!dependency) continue;
-        if (dependency.startsWith(finalPayload + '/')) {
-          ownRuntime = true;
-          await run(selected.tools.install_name_tool, ['-change', dependency,
-            '@rpath/' + relative(finalPayload, dependency), file], work);
-        } else if (isAbsolute(dependency) && !dependency.startsWith('/usr/lib/')
-          && !dependency.startsWith('/System/Library/')
-          && !Object.values(installed).some(path => dependency.startsWith(dirname(dirname(path)) + '/'))) {
-          fail('工具链接到未验真的外部库');
-        }
-      }
-      // 相对工具对象根定位同一候选与最终对象，避免Perl共享库在原子发布前指向不存在的前缀。
-      const loader = '@loader_path' + (relative(dirname(file), payload) ? '/' + relative(dirname(file), payload) : '');
-      // 仅链接同对象运行库的入口需要新rpath；系统库模块不能平白扩大Mach-O加载命令。
-      if (ownRuntime) await run(selected.tools.install_name_tool, ['-add_rpath', loader, file], work);
-      if (file.endsWith('.dylib')) await run(selected.tools.install_name_tool, ['-id',
-        '@rpath/' + relative(payload, file), file], work);
-      await run(selected.tools.codesign, ['--force', '--sign', '-', '--timestamp=none', file], work);
-    }
-  }
-
-  // 入口版本不能代替运行闭包验收；解释器必须在原子发布前真实加载所需核心与加密模块。
-  const executable = join(payload, tool.archive.executable);
-  const probe = async (args, extra = {}) => {
-    const result = await run(executable, args, work, extra);
-    if (result.stdout.trim() !== 'controlled-' + tool.id + '-ok') fail('解释器真实模块探测未返回准确结果');
-  };
-  if (tool.id === 'python') {
-    await probe(['-I', '-c', 'import ssl,zlib,bz2,lzma,sqlite3,ctypes,json; '
-      + 'assert ssl.create_default_context().verify_mode == ssl.CERT_REQUIRED; '
-      + 'assert ssl.OPENSSL_VERSION.startswith('+JSON.stringify('OpenSSL '+library.tools.find(value=>value.id==='openssl').version+' ')+'); print("controlled-python-ok")'],
-    { PYTHONHOME: payload });
-  } else if (tool.id === 'perl') {
-    const cores=perlRuntimeLibraries(await readFile(join(source,'config.sh'),'utf8'),finalPayload,payload);
-    for(const path of cores) await directory(path);
-    await regular(join(cores[1],'Config.pm'));
-    await probe(['-MConfig', '-MJSON::PP', '-MEncode', '-MFile::Find', '-e',
-      'die "Perl version" unless "$^V" eq '+JSON.stringify('v'+tool.version)+'; print "controlled-perl-ok\\n"'],
-      {PERL5LIB:cores.join(':')});
-  }
-  // 保留官方法律全文与原始源码归档；产品需要解释器运行库时可连同其原始许可一起打包。
-  if (tool.archive.kind === 'native-source') {
-    const legalNames = (await readdir(source)).filter(name => /^(?:COPYING|LICENSE|LICENCE|NOTICE|Artistic|COPYRIGHT|BSDL|GPL|LEGAL)(?:[._-].*)?$/iu.test(name));
-    if (!legalNames.length) fail('官方工具源码缺少根许可全文');
-    const directory = join(payload, 'licenses'); await mkdir(directory);
-    for (const name of legalNames) {
-      const file = join(source, name);
-      if ((await lstat(file)).isFile()) await writeFile(join(directory, name), await readFile(file), { flag: 'wx', mode: 0o444 });
-    }
-    if (!(await readdir(directory)).length) fail('工具根许可必须包含真实法律文件');
-  }
-
-  // 原件与编译输入回执留在唯一工具对象。
-  await writeFile(join(payload, 'source.archive'),
-    await readFile(archive), { flag: 'wx', mode: 0o444 });
-  if (upstream.length) {
-    const directory = join(payload, 'upstream-patches'); await mkdir(directory);
-    for (const [i, file] of upstream.entries()) await writeFile(join(directory, 'bash53-' + String(i + 1).padStart(3, '0')),
-      await readFile(file), { flag: 'wx', mode: 0o444 });
-    // 原件只保留在回执覆盖的payload内，清除同一安装事务产生的临时重复文件。
-    for (const [i, file] of upstream.entries()) {
-      await rm(file);
-    }
-  }
-  }
-return {buildSourceTool,validateSourceTool};})();
-const appleSystemTools = Object.freeze({
-  codesign: '/usr/bin/codesign', security: '/usr/bin/security',
-  xcrun: '/usr/bin/xcrun', 'xcode-select': '/usr/bin/xcode-select',
-});
-const appleBundleTools = new Set([
-  'xcodebuild', 'make', 'clang', 'clang++', 'swift', 'swiftc', 'ar', 'ld', 'as', 'nm', 'ranlib', 'strip', 'lipo', 'libtool',
-  'otool', 'install_name_tool', 'codesign_allocate', 'devicectl', 'xctrace', 'actool', 'ibtool', 'notarytool', 'llvm-nm',
-]);
-async function verifyAppleTools(library,{names=['xcodebuild'],signal,run=exec,environment=process.env}={}){
-  const wanted=library.tools.find(tool=>tool.id==='xcode');if(!wanted||!Array.isArray(names)||names.some(name=>!appleBundleTools.has(name)&&!Object.hasOwn(appleSystemTools,name)))fail('Apple工具需求无效');
-  const supplied=resourceSupplies.getStore();if(supplied)return supplied.acquireApple({...supplyRequirements().apple,names});
-  const env=cleanEnvironment(environment),developerDirectory=(await run('/usr/bin/xcode-select',['-p'],{env,signal})).stdout.trim();await directory(developerDirectory);
-  const tools={};for(const name of names){
-    const system=appleSystemTools[name],path=system||(name==='xcodebuild'?join(developerDirectory,'usr/bin/xcodebuild'):(await run('/usr/bin/xcrun',['--find',name],{env:{...env,DEVELOPER_DIR:developerDirectory},signal})).stdout.trim());
-    if(!isAbsolute(path)||resolve(path)!==path||(!system&&!inside(developerDirectory,path)))fail('Apple工具路径越界：'+name);
-    const actual=await realpath(path),info=await lstat(actual);
-    // Xcode 内的 clang++ 等可为链接或硬链接；只接受解析后仍位于当前 Xcode 的可执行普通文件。
-    if((system&&path!==system)||(!system&&!inside(developerDirectory,actual))||!info.isFile()||!(info.mode&0o111))fail('Apple工具身份无效：'+name);
-    // 执行时保留 ar、clang++ 等入口名；它们即使指向同一二进制，也可能按 argv[0] 选择不同模式。
-    tools[name]=path;
-  }
-  return {developerDirectory,version:wanted.version,tools};
- }
-
-const toolDefinitions=[{"id":"git","title":"Git","version":"2.54.0","source":"https://git-scm.com/download/mac","command":"git","archive":{"url":"https://www.kernel.org/pub/software/scm/git/git-2.54.0.tar.xz","sha256":"f689162364c10de79ef89aa8dbf48731eb057e34edbbd20aca510ce0154681a3","root":"git-2.54.0","executable":"bin/git","kind":"native-source"},"managed":true,"requires":["node","xcode","perl","python","gettext"]},{"id":"node","title":"Node.js","version":"25.2.1","source":"https://nodejs.org/dist/v25.2.1/SHASUMS256.txt","command":"node","archives":{"linux-arm":{"url":"https://nodejs.org/dist/v25.2.1/node-v25.2.1-linux-arm64.tar.xz","sha256":"75f910b5234d3ee324ceebcf41e2c3c221c4c2225463a02ecd685b884155e0f6","root":"node-v25.2.1-linux-arm64"},"linux-amd":{"url":"https://nodejs.org/dist/v25.2.1/node-v25.2.1-linux-x64.tar.xz","sha256":"b9f6a97e81c89a9df45526b4f86dafdccaf12b82295f7bf35bdb2b0f5e68744f","root":"node-v25.2.1-linux-x64"},"windows":{"url":"https://nodejs.org/dist/v25.2.1/node-v25.2.1-win-x64.zip","sha256":"f97ba75ead7720652f3925d9cf8661e083a28c6b98ea77acc83903d77a9dd688","root":"node-v25.2.1-win-x64"}},"archive":{"url":"https://nodejs.org/dist/v25.2.1/node-v25.2.1-darwin-arm64.tar.gz","sha256":"be87e21bd235a451fad02c89e5bf7cb17e206e4cd89dd5664f20d19e7dfde6f9","root":"node-v25.2.1-darwin-arm64","executable":"bin/node","kind":"extract"},"managed":true,"requires":[]},{"id":"python","title":"Python","version":"3.14.3","source":"https://www.python.org/downloads/macos/","command":"python3","archive":{"url":"https://www.python.org/ftp/python/3.14.3/Python-3.14.3.tar.xz","sha256":"a97d5549e9ad81fe17159ed02c68774ad5d266c72f8d9a0b5a9c371fe85d902b","root":"Python-3.14.3","executable":"bin/python3.14","kind":"native-source"},"managed":true,"requires":["node","xcode","openssl"],"dependencies":[{"name":"xz","version":"5.8.2","url":"https://github.com/tukaani-project/xz/releases/download/v5.8.2/xz-5.8.2.tar.xz","sha256":"890966ec3f5d5cc151077879e157c0593500a522f413ac50ba26d22a9a145214","root":"xz-5.8.2"}]},{"id":"xcode","title":"Xcode","version":"27.0","source":"https://developer.apple.com/xcode/","command":"xcodebuild","archive":null,"managed":false,"requires":[]},{"id":"perl","title":"Perl","version":"5.42.3","source":"https://www.cpan.org/src/5.0/","command":"perl","archive":{"url":"https://www.cpan.org/src/5.0/perl-5.42.3.tar.xz","sha256":"c9387e1473a1866935cb047ece7c2e0a80767a3acdecb79d4a375f8a95970ddc","root":"perl-5.42.3","executable":"bin/perl","kind":"native-source"},"managed":true,"requires":["node","xcode"]},{"id":"openssl","title":"OpenSSL","version":"3.6.3","source":"https://github.com/openssl/openssl/releases/download/openssl-3.6.3/","command":"openssl","archive":{"url":"https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz","sha256":"243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1","root":"openssl-3.6.3","executable":"bin/openssl","kind":"native-source"},"managed":true,"requires":["node","xcode","perl"]},{"id":"m4","title":"GNU M4","version":"1.4.21","source":"https://ftp.gnu.org/gnu/m4/","command":"m4","archive":{"url":"https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz","sha256":"f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66","root":"m4-1.4.21","executable":"bin/m4","kind":"native-source"},"managed":true,"requires":["node","xcode"]},{"id":"bison","title":"GNU Bison","version":"3.8.2","source":"https://ftp.gnu.org/gnu/bison/","command":"bison","archive":{"url":"https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz","sha256":"9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2","root":"bison-3.8.2","executable":"bin/bison","kind":"native-source"},"managed":true,"requires":["node","xcode","m4"]},{"id":"flex","title":"Flex","version":"2.6.4","source":"https://github.com/westes/flex/releases/download/v2.6.4/","command":"flex","archive":{"url":"https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz","sha256":"e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995","root":"flex-2.6.4","executable":"bin/flex","kind":"native-source"},"managed":true,"requires":["node","xcode","m4","bison"]},{"id":"gettext","title":"GNU Gettext","version":"1.0","source":"https://ftp.gnu.org/gnu/gettext/","command":"msgfmt","archive":{"url":"https://ftp.gnu.org/gnu/gettext/gettext-1.0.tar.gz","sha256":"85d99b79c981a404874c02e0342176cf75c7698e2b51fe41031cf6526d974f1a","root":"gettext-1.0","executable":"bin/msgfmt","kind":"native-source"},"managed":true,"requires":["node","xcode","perl","m4","bison","flex"]},{"id":"posix","title":"macOS POSIX 基础工具","version":"27.0","source":"https://opensource.apple.com/","command":"bash","archive":{"url":"https://opensource.apple.com/","sha256":"8ca7560842b9606bcbe9628248866cc52675775a956574199716515dadf020fe","root":"macos-posix-27.0","executable":"bin/bash","kind":"apple-posix"},"managed":true,"requires":["node","xcode"]},{"id":"bash","title":"GNU Bash","version":"5.3.20","source":"https://www.gnu.org/software/bash/","command":"bash","archive":{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3.tar.gz","sha256":"0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba","root":"bash-5.3","executable":"bin/bash","kind":"native-source"},"upstream_patches":[{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-001","sha256":"1f608434364af86b9b45c8b0ea3fb3b165fb830d27697e6cdfc7ac17dee3287f"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-002","sha256":"e385548a00130765ec7938a56fbdca52447ab41fabc95a25f19ade527e282001"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-003","sha256":"f245d9c7dc3f5a20d84b53d249334747940936f09dc97e1dcb89fc3ab37d60ed"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-004","sha256":"9591d245045529f32f0812f94180b9d9ce9023f5a765c039b852e5dfc99747d0"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-005","sha256":"cca1ef52dbbf433bc98e33269b64b2c814028efe2538be1e2c9a377da90bc99d"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-006","sha256":"29119addefed8eff91ae37fd51822c31780ee30d4a28376e96002706c995ff10"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-007","sha256":"c0976bbfffa1453c7cfdd62058f206a318568ff2d690f5d4fa048793fa3eb299"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-008","sha256":"097cd723cbfb8907674ac32214063a3fd85282657ec5b4e544d2c0f719653fb4"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-009","sha256":"eee30fe78a4b0cb2fe20e010e00308899cfc613e0774ebb3c8557a1552f24f8c"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-010","sha256":"cf76f1cce2ea300c18bff9f002d21f280cc931acd17c28518110b93fe6e72569"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-011","sha256":"0298df8f5ea2a31d3be43ed7d269c5b3c7c342dd5b570bea7f64d66dcbbe7531"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-012","sha256":"d71379b39bebaedaf123414414e77fb458a0a43b9ad3116594c6df7ca6754573"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-013","sha256":"042f9cda967e24bf4211944697441e93d06ff42b4b998629a98a1b249279f200"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-014","sha256":"bd4360b401d38507e358783dcad8536a99c6789f0d3a5bd0cfb8c4a34144696c"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-015","sha256":"55b79ceee2fc27f6767eed697e939a7eb2fe2a28c01556bd75f18d581014f46e"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-016","sha256":"9ea29b266b7d24cb34d0ff3f1c4631e4d527bfe2d1ef15d17cdb924bf31ef767"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-017","sha256":"443b927b45c1558ca72052410f8b8f6e5152b617ed707061a2781d4375b0d1c3"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-018","sha256":"ae715d76c50341d7d7095e9a8d2eeed1ca9546152c2ac7289206f90cf30ac697"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-019","sha256":"a25c581e4d0057dea3833918438a930e2e86ee4c6dc17fe15267b7f04cbc4e3d"},{"url":"https://ftp.gnu.org/gnu/bash/bash-5.3-patches/bash53-020","sha256":"df217ed3a9122aa2286d9b67bbe348661b6a9db262b580c29150dae55d532896"}],"managed":true,"requires":["node","xcode","posix"]},{"id":"grep","title":"GNU grep","version":"3.12","source":"https://www.gnu.org/software/grep/","command":"grep","archive":{"url":"https://ftp.gnu.org/gnu/grep/grep-3.12.tar.xz","sha256":"2649b27c0e90e632eadcd757be06c6e9a4f48d941de51e7c0f83ff76408a07b9","root":"grep-3.12","executable":"bin/grep","kind":"native-source"},"managed":true,"requires":["node","xcode","posix"]},{"id":"sed","title":"GNU sed","version":"4.10","source":"https://www.gnu.org/software/sed/","command":"sed","archive":{"url":"https://ftp.gnu.org/gnu/sed/sed-4.10.tar.xz","sha256":"b8e72182b2ec96a3574e2998c47b7aaa64cc20ce000d8e9ac313cc07cecf28c7","root":"sed-4.10","executable":"bin/sed","kind":"native-source"},"managed":true,"requires":["node","xcode","posix"]}];
+const toolDefinitions=Object.freeze([{"id":"node","title":"Node.js","version":"25.2.1","source":"https://nodejs.org/dist/v25.2.1/SHASUMS256.txt","command":"node","archive":{"url":"https://nodejs.org/dist/v25.2.1/node-v25.2.1-darwin-arm64.tar.gz","sha256":"be87e21bd235a451fad02c89e5bf7cb17e206e4cd89dd5664f20d19e7dfde6f9","root":"node-v25.2.1-darwin-arm64","executable":"bin/node","kind":"extract"},"managed":true,"requires":[]}]);
 const cleanEnvironment=environment=>Object.fromEntries(['HOME','USER','LOGNAME','LANG','LC_ALL'].filter(k=>typeof environment[k]==='string').map(k=>[k,environment[k]]));
-const objectRecipe=tool=>hash(JSON.stringify([tool,tool.id==='posix'?posixRecipe.buildPosixTool.toString():tool.archive?.kind==='native-source'?sourceRecipe.buildSourceTool.toString():'locked-extract-v1']));
-function toolArchive(tool){if(tool.archive)return tool.archive;if(tool.id==='cmake')return {...tool.archives.macos,kind:'extract',executable:'bin/cmake'};return null;}
+const objectRecipe=tool=>hash(JSON.stringify([tool,'locked-extract-v1']));
+function toolArchive(tool){if(tool?.id!=='node'||tool.archive?.kind!=='extract')fail('Web仅支持锁定Node发行件');return tool.archive;}
 async function verifyToolObject(directory,tool){
   if(!await stat(directory))return null;await directoryCheck(directory);const payload=join(directory,'payload'),archive=toolArchive(tool),path=join(payload,archive.executable);
   await directoryCheck(payload);const info=await regular(path);if(!(info.mode&0o111))fail('工具入口不可执行');return {path,version:tool.version};
  }
 const directoryCheck=path=>directory(path);
-// 基础工具的正式PATH投影排除发行件旧Shell/grep/sed；自举仅限本产品已声明GNU三工具。
-async function productFoundation(library,verify,{bootstrap=false,id}={}){
- if(library.gateLinuxFoundation)return library.gateLinuxFoundation;
- const base=await posixRecipe.controlledPosixTools(library,verify);if(bootstrap){if(!['bash','grep','sed'].includes(id))fail('自举仅限GNU三工具');return {...base,path:base.bin};}
- const tools={...base.tools},paths=[];for(const name of ['bash','grep','sed']){const tool=library.tools.find(x=>x.id===name),value=tool&&await verify(library,tool);if(!value)fail('GNU闭包缺失：'+name);tools[name]=value.path;paths.push(dirname(value.path));}tools.sh=tools.bash;delete tools.egrep;delete tools.fgrep;
- const view=join(library.work,'resource-tools');await directory(view,true);const shell=join(view,'sh');if(await stat(shell)){if(!((await lstat(shell)).isSymbolicLink())||await realpath(shell)!==tools.sh)fail('GNU sh交付漂移');}else await symlink(tools.sh,shell);for(const [name,path]of Object.entries(base.tools)){if(['sh','bash','grep','sed','egrep','fgrep'].includes(name))continue;const link=join(view,name);if(await stat(link)){if(!((await lstat(link)).isSymbolicLink())||await realpath(link)!==path)fail('基础交付漂移');}else await symlink(path,link);}return {tools,bin:view,path:[...paths,view].join(':')};
-}
-async function prepareSourceDependencies({library,tool,pending,signal,fetcher,options={}}){const result=new Map();for(const entry of tool.dependencies||[])result.set(entry.name,await acquireArchive(entry,{work:library.work,store:join(library.root,'archives'),optional:options.optionalDependencies,offline:options.offline,signal,fetcher}));return result;}
 async function commitCandidate(pending,target,{signal,verify}={}){
  const supplied=resourceSupplies.getStore();if(supplied){if(typeof supplied.publishCandidate!=='function')fail('供给未交付提交能力');return supplied.publishCandidate(pending,target);}
 
@@ -1207,48 +761,37 @@ async function commitCandidate(pending,target,{signal,verify}={}){
  const lock=target+'.lock';let handle;for(let n=0;n<500;n++){signal?.throwIfAborted();try{handle=await open(lock,'wx',0o600);break;}catch(e){if(e.code!=='EEXIST')throw e;await new Promise(r=>setTimeout(r,20));}}if(!handle)fail('原件提交锁等待超限');
  try{signal?.throwIfAborted();if(await stat(target)){if(verify)await verify(target);}else await rename(pending,target);}finally{await handle.close();await rm(lock);}
 }
-async function installTool(library,tool,options,visiting=new Set()){
- const supplied=resourceSupplies.getStore();if(supplied&&!supplied.preparingTool){
-  if(library.installed.has(tool.id))return library.installed.get(tool.id);
-  const value=tool.id==='xcode'?await supplied.acquireApple({...supplyRequirements().apple,names:['xcodebuild']}).then(apple=>({path:apple.tools.xcodebuild,version:tool.version})):await supplied.acquireTool(supplyRequirements().tools.find(item=>item.id===tool.id));
-  library.installed.set(tool.id,value);return value;
- }
-
- if(library.installed.has(tool.id))return library.installed.get(tool.id);if(visiting.has(tool.id))fail('工具声明循环：'+tool.id);visiting=new Set([...visiting,tool.id]);const archive=toolArchive(tool);
- if(tool.id==='xcode'){const apple=await verifyAppleTools(library,{environment:cleanEnvironment(options.environment),signal:options.signal});const value={path:apple.tools.xcodebuild,version:tool.version};library.installed.set(tool.id,value);return value;}
- if(!archive)fail('工具归档未声明：'+tool.id);const shared=join(library.root,'shared');await directory(shared,true);const target=join(shared,archive.sha256+'-'+objectRecipe(tool));const verify=p=>verifyToolObject(p,tool,{produced:true});let value=await verify(target);
- if(!value&&options.optionalTools&&await stat(options.optionalTools)){await directory(options.optionalTools);value=await verifyToolObject(join(options.optionalTools,'shared',archive.sha256),tool);}
- for(const id of tool.requires||[]){const entry=library.tools.find(x=>x.id===id);if(!entry)fail('前置工具未声明：'+id);await installTool(library,entry,options,visiting);}
- if(value){library.installed.set(tool.id,value);return value;}if(options.offline)fail('离线缺少工具：'+tool.id);
- // Node用内置解包形成最小宿主，POSIX用固定签名输入；其余工具只能使用完成GNU接管的基础工具。
- let foundation;if(!['node','posix'].includes(tool.id)){for(const id of ['posix',...(['bash','grep','sed'].includes(tool.id)?[]:['bash','grep','sed'])]){if(visiting.has(id))fail('工具自举循环');await installTool(library,library.tools.find(x=>x.id===id),options,visiting);}foundation=await productFoundation(library,async(_,t)=>library.installed.get(t.id),{bootstrap:['bash','grep','sed'].includes(tool.id),id:tool.id});}
- const pending=await fixedScratch(join(await resourceWork(library.work),'.'+archive.sha256+'-'));const canonical=join(pending,'library/shared',archive.sha256+'.pending'),payload=join(canonical,'payload');const localLibrary={...library,pending:canonical,finalPayload:options.finalPayload||join(target,'payload')};await directory(canonical,true);const original=join(canonical,'archive');
+async function installTool(library,tool,options){
+ const archive=toolArchive(tool);if(library.installed.has('node'))return library.installed.get('node');
+ const supplied=resourceSupplies.getStore();
+ if(supplied&&!supplied.preparingTool){const value=await supplied.acquireTool(supplyRequirements().tools[0]);library.installed.set('node',value);return value;}
+ const shared=join(library.root,'shared');await directory(shared,true);
+ const target=join(shared,archive.sha256+'-'+objectRecipe(tool)),verify=path=>verifyToolObject(path,tool);
+ let value=await verify(target);
+ if(value){library.installed.set('node',value);return value;}
+ if(options.offline)fail('离线缺少锁定Node');
+ const pending=await fixedScratch(join(await resourceWork(library.work),'.'+archive.sha256+'-'));
+ const canonical=join(pending,'library/shared',archive.sha256+'.pending'),payload=join(canonical,'payload'),original=join(canonical,'archive');
+ await directory(canonical,true);
  try{
-  let source;if(archive.kind==='apple-posix'){await verifyAppleTools(library,{names:['codesign'],environment:cleanEnvironment(options.environment),signal:options.signal});await posixRecipe.buildPosixTool({tool,payload,bootstrap:true,run:exec,signal:options.signal});source=payload;}
-  else{const file=await acquireArchive(archive,{work:library.work,store:join(library.root,'archives'),optional:options.optionalDependencies,offline:options.offline,fetcher:options.fetcher,signal:options.signal});await copyFile(file,original);const unpacked=join(canonical,'unpack');await unpack(original,unpacked,{foundation,signal:options.signal});source=archive.root==='.'?unpacked:join(unpacked,archive.root);await directory(source);}
-  const environment={...cleanEnvironment(options.environment),HOME:canonical,TMPDIR:canonical,PATH:foundation?.path||'',PRODUCT_WORK_DIR:canonical};
-  const verifyInstalled=async(_,t)=>library.installed.get(t.id)||null;
-  if(archive.kind==='native-source')await sourceRecipe.buildSourceTool({library:localLibrary,tool,source,archive:original,pending:canonical,payload,finalPayload:localLibrary.finalPayload,signal:options.signal,fetcher:options.fetcher,exec,verify:verifyInstalled,apple:verifyAppleTools,bootstrap:['bash','grep','sed'].includes(tool.id),environment,prepare:input=>prepareSourceDependencies({...input,options}),download:(entry,target,context)=>downloadTool(entry,target,{...context,...options,work:library.work,store:join(library.root,'archives'),optional:options.optionalDependencies})});
-  else if(archive.kind==='extract')await rename(source,payload);
-  else if(archive.kind!=='apple-posix')fail('Web工具归档类型无效');
-  if(tool.id==='python')environment.PYTHONHOME=payload;
-
-  await permissions(payload,false);
-  options.signal?.throwIfAborted();await commitCandidate(canonical,target,{signal:options.signal,verify});value=await verify(target);library.installed.set(tool.id,value);return value;
+  const source=await acquireArchive(archive,{work:library.work,store:join(library.root,'archives'),optional:options.optionalDependencies,offline:options.offline,fetcher:options.fetcher,signal:options.signal});
+  await copyFile(source,original);
+  const unpacked=join(canonical,'unpack');await extractArchive(original,unpacked,{signal:options.signal});
+  const content=join(unpacked,archive.root);await directory(content);await rename(content,payload);
+  await permissions(payload,false);options.signal?.throwIfAborted();
+  await commitCandidate(canonical,target,{signal:options.signal,verify});value=await verify(target);
+  library.installed.set('node',value);return value;
  }finally{if(await stat(pending)){await permissions(pending,true);await rm(pending,{recursive:true});}}
 }
 async function checkedLock(path){await regular(path);const s=await lstat(path);if(s.size>32*1024**2)fail('锁文件超限');return readFile(path,'utf8');}
 async function packageOriginal(entry,options){return acquireArchive(entry,{work:options.library.work,store:join(options.dependencyRoot||join(options.library.root,'..','rely'),'archives'),optional:options.optionalDependencies,offline:options.offline,fetcher:options.fetcher,signal:options.signal});}
 async function prepareNpm(locks,work,options){const cache=join(work,'npm');await directory(cache,true);const node=options.library.installed.get('node').path,require=createRequire(join(dirname(node),'../lib/node_modules/npm/bin/npm-cli.js')),cacache=require('cacache');for(const lock of locks){const document=JSON.parse(await checkedLock(lock));if(![2,3].includes(document.lockfileVersion)||!document.packages)fail('npm原始锁格式无效');for(const [path,entry]of Object.entries(document.packages)){if(!path||entry.link)continue;if(!entry.resolved||!entry.integrity||!entry.version)fail('npm包未锁定来源');const file=await packageOriginal({url:entry.resolved,integrity:entry.integrity},options);await cacache.put(join(cache,'_cacache'),'make-fetch-happen:request-cache:'+entry.resolved,await readFile(file),{integrity:entry.integrity,metadata:{time:Date.now(),url:entry.resolved,reqHeaders:{},resHeaders:{'content-type':'application/octet-stream'}}});}}return {npmCache:cache};}
-async function appleEnvironment(library,options){if(!library.installed.has('xcode'))return {};const mapping={xcodebuild:'XCODEBUILD',codesign:'CODESIGN',security:'SECURITY',xcrun:'XCRUN','xcode-select':'XCODE_SELECT',clang:'CC','clang++':'CXX',swift:'SWIFT',otool:'OTOOL',install_name_tool:'INSTALL_NAME_TOOL',lipo:'LIPO',make:'MAKE',ar:'AR',ranlib:'RANLIB',nm:'NM',strip:'STRIP','llvm-nm':'LLVM_NM'};const apple=await verifyAppleTools(library,{names:Object.keys(mapping),signal:options.signal,environment:cleanEnvironment(options.environment)}),environment={DEVELOPER_DIR:apple.developerDirectory};const bin=join(library.work,'apple-tools');await directory(bin,true);for(const [name,key]of Object.entries(mapping)){environment[key]=apple.tools[name];const target=join(bin,name);if(await stat(target)){if(!((await lstat(target)).isSymbolicLink())||await realpath(target)!==await realpath(apple.tools[name]))fail('Apple任务入口漂移');}else await symlink(apple.tools[name],target);}environment.PATH=bin;environment.LD=apple.tools.clang;environment.LDCXX=apple.tools['clang++'];environment.CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=apple.tools.clang;const sdk=(await exec(apple.tools.xcrun,['--sdk','macosx','--show-sdk-path'],{signal:options.signal,env:{PATH:'',DEVELOPER_DIR:apple.developerDirectory},timeout:60000})).stdout.trim();environment.SDKROOT=await realpath(sdk);if(!inside(apple.developerDirectory,environment.SDKROOT))fail('SDK越出Xcode');return environment;}
 // 可选供给遵循唯一原件协议，产品独立解析本仓锁，拒绝旧快照和状态库回退。
 async function readDependencySupply(objects) {
  if(!objects||!await stat(objects))return null;await directory(objects);const file=join(dirname(objects),'index.json');await regular(file);
  if((await lstat(file)).size>32*1024**2)fail('可选原件索引超限');const value=JSON.parse(await readFile(file,'utf8'));
  if(!value||typeof value!=='object'||Array.isArray(value)||JSON.stringify(Object.keys(value).sort())!==JSON.stringify(['git_sources','packages','pods','schema_version'])||value.schema_version!==2||!Array.isArray(value.packages)||!Array.isArray(value.git_sources)||!Array.isArray(value.pods))fail('可选原件索引协议无效');return value;
 }
-const buildSourceTool=sourceRecipe.buildSourceTool;
-const posixNames=posixRecipe.posixNames;
 function resourceDeclarations(){return {tools:toolDefinitions};}
 // 完整入口可由调用方的启动Node进入；产品自行取得锁定Node并重新进入自己的入口。
 // 启动Node只执行内置下载/摘要/解包，不成为产品编译工具版本的第二真源。
@@ -1258,7 +801,7 @@ async function bootstrapNode(work,options={}) {
  const store=options.storeRoot||join(homedir(),'.local/share/product-resources');
  if(inside(root,store)||inside(store,root)||inside(work,store)||inside(store,work)||store===work)fail('启动原件库边界交叉');
  const library={root:join(store,'tools'),work,tools:toolDefinitions,installed:new Map()};await directory(library.root,true);
- const context={environment,offline:false,fetcher:fetch,...options,library,optionalTools:environment.PRODUCT_TOOL_ROOT,
+ const context={environment,offline:false,fetcher:fetch,...options,library,
   optionalDependencies:environment.PRODUCT_DEPENDENCY_ROOT?join(environment.PRODUCT_DEPENDENCY_ROOT,'objects'):undefined};
  return installTool(library,toolDefinitions.find(x=>x.id==='node'),context);
 }
@@ -1275,17 +818,15 @@ async function prepareResourceSupply(platform,work,previous,options){
 async function materializeResources(platform,work,previous={},options={}){
  const owner=buildPublic;owner.checkWork(work);const request=()=>owner.requirements(platform,work);const requirement=request(),environment=options.environment||process.env;
  if(previous.schema!==undefined&&(previous.schema!==1||previous.product_id!==requirement.product_id||previous.platform!==platform||previous.work!==work))fail('资源请求身份无效');options={environment,fetcher:fetch,offline:false,...options};options.signal?.throwIfAborted();
- const store=options.storeRoot||join(homedir(),'.local/share/product-resources'),optionalTools=options.toolRoot||environment.PRODUCT_TOOL_ROOT,optionalDependencies=options.dependencyRoot?join(options.dependencyRoot,'objects'):environment.PRODUCT_DEPENDENCY_ROOT?join(environment.PRODUCT_DEPENDENCY_ROOT,'objects'):undefined;
+ const store=options.storeRoot||join(homedir(),'.local/share/product-resources'),optionalDependencies=options.dependencyRoot?join(options.dependencyRoot,'objects'):environment.PRODUCT_DEPENDENCY_ROOT?join(environment.PRODUCT_DEPENDENCY_ROOT,'objects'):undefined;
  await directory(store,true);if(inside(root,store)||inside(store,root)||inside(work,store)||inside(store,work)||store===work)fail('原件库与源码或工作区交叉');
  // tools承载工具发行件/编译输入，rely承载产品依赖原件；不把可写任务缓存混入任一原件库。
- const library={root:options.toolRoot||join(store,'tools'),work,tools:toolDefinitions,requested:requirement.tools,installed:new Map()};await directory(library.root,true);options={...options,platform,optionalTools,optionalDependencies,library,dependencyRoot:options.dependencyRoot||join(store,'rely'),sources:requirement.sources};
+ const library={root:options.toolRoot||join(store,'tools'),work,tools:toolDefinitions,requested:requirement.tools,installed:new Map()};await directory(library.root,true);options={...options,platform,optionalDependencies,library,dependencyRoot:options.dependencyRoot||join(store,'rely'),sources:requirement.sources};
  for(const request of requirement.tools){const definition=toolDefinitions.find(x=>x.id===request.id);if(!definition||definition.version!==request.version)fail('需求与产品自己的工具配方不一致：'+request.id);}
- // Node与其它工具同样按本产品声明准备，只消费实际入口。
+ // Web 的完整构建只执行锁定 Node/npm 与本仓 npm 原锁；不准备原生源码工具链。
  const node=toolDefinitions.find(x=>x.id==='node');if(process.platform!=='darwin'||process.arch!=='arm64')fail('本机资源配方仅支持已声明macOS ARM宿主');await installTool(library,node,options);if(hash(await readFile(process.execPath))!==hash(await readFile(library.installed.get('node').path)))fail('运行Node不是产品声明的官方入口字节');
- for(const request of requirement.tools)await installTool(library,toolDefinitions.find(x=>x.id===request.id),options);
  const receipt={schema:1,product_id:requirement.product_id,platform,work,tools:Object.fromEntries(library.installed),dependencies:{},archives:{},environment:{},offline:true};for(const key of ['run_id','program_digest'])if(previous[key]!==undefined)receipt[key]=previous[key];
- for(const id of ['posix','bash','grep','sed'])await installTool(library,toolDefinitions.find(x=>x.id===id),options);receipt.tools=Object.fromEntries(library.installed);const foundation=await productFoundation(library,async(_,t)=>library.installed.get(t.id));const apple=await appleEnvironment(library,options);receipt.environment={PATH:[apple.PATH,foundation.path,...[...library.installed].filter(([id])=>id!=='posix').map(([,x])=>dirname(x.path))].filter(Boolean).join(':'),PRODUCT_WORK_DIR:work};
- receipt.tools=Object.fromEntries(library.installed);
+ receipt.environment={PATH:dirname(library.installed.get('node').path),PRODUCT_WORK_DIR:work};
  if(requirement.sources.length||requirement.archives.length||requirement.locks.length!==1
   ||requirement.locks[0].ecosystem!=='npm'||requirement.locks[0].path!=='package-lock.json')fail('Web资源闭包越出本产品npm原锁');
  const target=join(work,'dependencies/own');await directory(target,true);
@@ -1295,31 +836,30 @@ async function materializeResources(platform,work,previous={},options={}){
 
 // 公开声明与候选配方；供给对象的领取、提交及删除只由调度方实现。
 function supplyRequirements(){
- const wanted=toolDefinitions.filter(tool=>tool.id!=='xcode').map(tool=>{const archive=toolArchive(tool);return {...tool,archive,slots:[...new Set([archive?.executable,...(tool.slots||[])].filter(Boolean))]};});
- const xcode=toolDefinitions.find(tool=>tool.id==='xcode');
- return {tools:wanted,apple:{version:xcode.version,source:xcode.source,names:[...new Set([...Object.keys(appleSystemTools),...appleBundleTools])]}};
+ const node=toolDefinitions.find(tool=>tool.id==='node');
+ return {tools:[{...node,slots:[node.archive.executable]}]};
 }
 function assertWorkQuiescent(work){for(const pid of supplyGroups.get(work)||[])try{process.kill(-pid,0);fail('资源工具退出未确认');}catch(error){if(error.code!=='ESRCH')throw error;}if(retainedResourcePath(work))fail('资源工具退出未确认');}
-async function prepareToolSupply(tool,{original,payload,work,signal,offline,acquireOriginal,acquireTool,acquireApple,publishCandidate,environment,finalPayload}){
+async function prepareToolSupply(tool,{original,payload,work,signal,offline,acquireOriginal,publishCandidate,environment}){
+ if(tool?.id!=='node'||tool.version!==toolDefinitions[0].version
+   ||JSON.stringify(tool.archive)!==JSON.stringify(toolDefinitions[0].archive)
+   ||JSON.stringify(tool.requires)!=='[]')fail('Web工具配方只接受锁定Node');
  const at=await fixedScratch(join(work,'.tool-recipe-'+tool.id+'-'+randomUUID()));
  const library={root:at,work,tools:toolDefinitions,installed:new Map(),requested:[],};
- const context={work,toolRoot:at,dependencyRoot:join(work,'dependencies'),acquireOriginal,acquireTool,acquireApple,publishCandidate,preparingTool:true};
+ const context={work,toolRoot:at,dependencyRoot:join(work,'dependencies'),acquireOriginal,publishCandidate,preparingTool:true};
  try{return await resourceSupplies.run(context,async()=>{
-  const definition=toolDefinitions.find(entry=>entry.id===tool.id);if(!definition)fail('工具配方未声明');
-  const ids=[...(definition.requires||[]),...(!['node','posix'].includes(tool.id)?['posix',...(['bash','grep','sed'].includes(tool.id)?[]:['bash','grep','sed'])]:[])];
-  for(const id of new Set(ids)){if(id==='xcode'){const apple=await acquireApple({...supplyRequirements().apple,names:['xcodebuild']});library.installed.set(id,{path:apple.tools.xcodebuild,version:toolDefinitions.find(t=>t.id===id).version});}else{const entry=supplyRequirements().tools.find(t=>t.id===id);if(!entry)fail('工具前置未声明');library.installed.set(id,await acquireTool(entry));}}
-  const value=await installTool(library,definition,{library,signal,offline,environment,finalPayload,dependencyRoot:context.dependencyRoot});
-  const executable=toolArchive(definition).executable,built=value.path.slice(0,-executable.length-1);await chmod(built,0o700);await rm(payload,{recursive:true,force:true});await rename(built,payload);
+  const value=await installTool(library,toolDefinitions[0],{library,signal,offline,environment});
+  const built=value.path.slice(0,-tool.archive.executable.length-1);await chmod(built,0o700);await rm(payload,{recursive:true,force:true});await rename(built,payload);
   return {schema:1,id:tool.id,version:tool.version,payload,original};
  });}finally{assertWorkQuiescent(work);await rm(at,{recursive:true,force:true});}
 }
 
-// Build只公开通用资源能力；门禁策略与资源计划归门禁文件。
-const resourceSupport=Object.freeze({root,hash,safePath,inside,stat,regular,directory,permissions,directoryCheck,retainedResourcePath,toolDefinitions,toolArchive,objectRecipe,verifyToolObject,verifyAppleTools,prepareNpm,cleanEnvironment,runResourceProcess,inventory,acquireArchive,extractArchive,resources,rm});
+// Build 仅公开 Node、npm 原锁所需的资源能力；门禁策略归门禁文件。
+const resourceSupport=Object.freeze({root,hash,safePath,inside,stat,regular,directory,permissions,directoryCheck,retainedResourcePath,toolDefinitions,toolArchive,objectRecipe,verifyToolObject,prepareNpm,cleanEnvironment,runResourceProcess,inventory,acquireArchive,extractArchive,resources,rm});
 
-return Object.freeze({runResourceProcess,inventory,acquireArchive,extractArchive,readDependencySupply,buildSourceTool,posixNames,resourceDeclarations,bootstrapNode,resources,prepareResourceSupply,supplyRequirements,assertWorkQuiescent,prepareToolSupply,resourceSupport});
+return Object.freeze({runResourceProcess,inventory,acquireArchive,extractArchive,readDependencySupply,resourceDeclarations,bootstrapNode,resources,prepareResourceSupply,supplyRequirements,assertWorkQuiescent,prepareToolSupply,resourceSupport});
 })();
-export const {runResourceProcess,inventory,acquireArchive,extractArchive,readDependencySupply,buildSourceTool,posixNames,resourceDeclarations,bootstrapNode,resources,prepareResourceSupply,supplyRequirements,assertWorkQuiescent,prepareToolSupply,resourceSupport}=resourceRuntime;
+export const {runResourceProcess,inventory,acquireArchive,extractArchive,readDependencySupply,resourceDeclarations,bootstrapNode,resources,prepareResourceSupply,supplyRequirements,assertWorkQuiescent,prepareToolSupply,resourceSupport}=resourceRuntime;
 
 export function productTestSources(){return ['scripts/build.mjs'];}
 export async function productTests({signal}={}){
@@ -1408,8 +948,15 @@ const fixture=work=>{
  const platform='web',own={npmCache:join(work,'npmCache')};mkdirSync(own.npmCache);
  return {schema:1,product_id:contract.product_id,platform,work,offline:true,
  tools:Object.fromEntries(contract.platforms[platform].tools.map(tool=>[tool.id,{version:tool.version,path:process.execPath}])),
- dependencies:{own},archives:{},environment:{}};
+ dependencies:{own},archives:{},environment:{PATH:dirname(process.execPath),PRODUCT_WORK_DIR:work}};
 };
+test('GitHub检出提交仅接受独立HEAD中的准确SHA',()=>{
+ const work=sandbox(),git=join(work,'.git'),head=join(git,'HEAD');try{
+  mkdirSync(git);writeFixture(head,'a'.repeat(40)+'\n');assert.equal(checkoutSHA(work),'a'.repeat(40));
+  writeFixture(head,'ref: refs/heads/main\n');assert.throws(()=>checkoutSHA(work),/提交身份/u);
+  rmSync(head);symlinkSync(join(work,'outside'),head);assert.throws(()=>checkoutSHA(work),/提交身份|ENOENT/u);
+ }finally{removeFixture(work,{recursive:true});}
+});
 test('官网白皮书静态正文保留图片且缺少原件时失败',async()=>{
  const {whitepaperContent}=await import('../config/vite.config.ts');
  const source='# 白皮书\n<img src="./assets/diagram.png">';
@@ -1440,6 +987,7 @@ test('资源回执隔离产品、平台、工作根，准确工具版本且禁�
   assert.throws(()=>resourceEnvironment(platform,work,{...receipt,product_id:'another'}),/身份/);
   assert.throws(()=>resourceEnvironment(platform,work,{...receipt,offline:false}),/身份/);
   assert.throws(()=>resourceEnvironment(platform,work,{...receipt,tools:{}}),/工具/);
+  assert.throws(()=>resourceEnvironment(platform,work,{...receipt,tools:{...receipt.tools,git:receipt.tools.node}}),/闭包/);
   assert.throws(()=>resourceEnvironment(platform,work,{...receipt,environment:{NODE_OPTIONS:'--inspect'}}),/注入/);
   const id=Object.keys(receipt.tools)[0];assert.throws(()=>resourceEnvironment(platform,work,{...receipt,tools:{...receipt.tools,[id]:{...receipt.tools[id],version:'wrong'}}}),/版本/);
   const env=resourceEnvironment(platform,work,receipt,{HOME:'/home',TOKEN:'private',INJECTED_CONTEXT:'/private'});
@@ -1761,21 +1309,7 @@ const {gzipSync} = await import('node:zlib');
 
 const hash=b=>createHash('sha256').update(b).digest('hex');
 async function sandbox(t){const root=await realpath(await mkdtemp(join(tmpdir(),contract.product_id+'-resources-')));t.after(()=>rm(root,{recursive:true,force:true}));return root;}
-test('Apple 工具接受当前 Xcode 内的链接与硬链接并拒绝越界目标',async t=>{
- const base=await sandbox(t),developerDirectory=join(base,'Xcode.app/Contents/Developer'),bin=join(developerDirectory,'usr/bin');
- await mkdir(bin,{recursive:true});await writeFile(join(bin,'clang'),'#!/bin/sh\n',{mode:0o755});
- await symlink('clang',join(bin,'clang++'));await link(join(bin,'clang'),join(bin,'ar'));
- const library={tools:[{id:'xcode',version:'27.0'}]};
- const run=async(command,args)=>({stdout:(command==='/usr/bin/xcode-select'?developerDirectory:join(bin,args[1]))+'\n'});
- const result=await resourceSupport.verifyAppleTools(library,{names:['clang','clang++','ar'],run});
- assert.equal(result.tools['clang++'],join(bin,'clang++'));assert.equal(result.tools.ar,join(bin,'ar'));
- await rm(join(bin,'clang++'));await writeFile(join(base,'outside'),'#!/bin/sh\n',{mode:0o755});await symlink(join(base,'outside'),join(bin,'clang++'));
- await assert.rejects(resourceSupport.verifyAppleTools(library,{names:['clang++'],run}),/路径越界|身份无效/u);
- await rm(join(bin,'clang++'));await writeFile(join(bin,'clang++'),'plain',{mode:0o600});
- await assert.rejects(resourceSupport.verifyAppleTools(library,{names:['clang++'],run}),/身份无效/u);
-});
-const archive=(body,url='https://example.invalid/locked.tgz')=>({url,sha256:hash(body)});
-function tar(entries){const records=[];for(const {name,body='',type='0',target='',mtime=0}of entries){const b=Buffer.from(body),h=Buffer.alloc(512);h.write(name,0,100);h.write('0000644\0',100);h.write('0000000\0',108);h.write('0000000\0',116);h.write(b.length.toString(8).padStart(11,'0')+'\0',124);h.write(mtime.toString(8).padStart(11,'0')+'\0',136);h.fill(32,148,156);h.write(type,156);h.write(target,157,100);h.write('ustar\0',257);h.write('00',263);h.write([...h].reduce((a,b)=>a+b,0).toString(8).padStart(6,'0')+'\0 ',148);records.push(h,b,Buffer.alloc((512-b.length%512)%512));}return gzipSync(Buffer.concat([...records,Buffer.alloc(1024)]));}
+function tar(entries){const records=[];for(const {name,body='',type='0',target=''}of entries){const b=Buffer.from(body),h=Buffer.alloc(512);h.write(name,0,100);h.write('0000644\0',100);h.write('0000000\0',108);h.write('0000000\0',116);h.write(b.length.toString(8).padStart(11,'0')+'\0',124);h.write('00000000000\0',136);h.fill(32,148,156);h.write(type,156);h.write(target,157,100);h.write('ustar\0',257);h.write('00',263);h.write([...h].reduce((a,b)=>a+b,0).toString(8).padStart(6,'0')+'\0 ',148);records.push(h,b,Buffer.alloc((512-b.length%512)%512));}return gzipSync(Buffer.concat([...records,Buffer.alloc(1024)]));}
 test('首次按锁取得；再次复用不联网，损坏原件不覆盖',async t=>{
  const root=await sandbox(t),body=Buffer.from('locked-source'),entry=archive(body);let requests=0;
  const options={store:root,fetcher:async()=>{requests++;return new Response(body);}};
@@ -1812,12 +1346,6 @@ test('归档安全解包并隔离不同任务，拒绝路径和链接越界',asy
  const first=join(root,'first'),second=join(root,'second');await extractArchive(source,first,{prefix:'package'});await extractArchive(source,second,{prefix:'package'});assert.equal(await realpath(join(first,'b')),join(first,'a'));await writeFile(join(first,'a'),'task1');assert.equal(await readFile(join(second,'a'),'utf8'),'source');
  for(const [name,entries]of [['path',[{name:'../outside',body:'x'}]],['link',[{name:'package/a',body:'x'},{name:'package/b',type:'2',target:'../../outside'}]],['parent',[{name:'package/a',type:'2',target:'b'},{name:'package/a/child',body:'x'},{name:'package/b',body:'x'}]]]){const file=join(root,name+'.tgz');await writeFile(file,tar(entries));await assert.rejects(extractArchive(file,join(root,name),{prefix:name==='path'?'':'package'}),/越界|父目录/);assert.equal((await readdir(root)).includes(name),false);}
 });
-test('源码归档保留生成文件的新旧时间，避免无授权的 Autotools 重生成',async t=>{
- const root=await sandbox(t),input=join(root,'source.tgz'),destination=join(root,'source');
- await writeFile(input,tar([{name:'package/configure.ac',body:'source',mtime:1600000000},{name:'package/aclocal.m4',body:'generated',mtime:1600000100}]));
- await extractArchive(input,destination,{prefix:'package'});
- assert.ok((await lstat(join(destination,'aclocal.m4'))).mtimeMs-(await lstat(join(destination,'configure.ac'))).mtimeMs>=99000);
-});
 test('链接原件目录、重复成员与解包取消拒绝且不写第三方目录',async t=>{
  const root=await sandbox(t),external=join(root,'external'),link=join(root,'link');await mkdir(external);await symlink(external,link);await assert.rejects(acquireArchive(archive(Buffer.from('source')),{store:link,offline:true}),/链接/);assert.deepEqual(await readdir(external),[]);
  const input=join(root,'input.tgz');await writeFile(input,tar([{name:'a',body:'x'},{name:'a',body:'y'}]));await assert.rejects(extractArchive(input,join(root,'duplicate')),/重复/);
@@ -1826,7 +1354,8 @@ test('链接原件目录、重复成员与解包取消拒绝且不写第三方�
 test('产品配方覆盖自身需求和递归工具，模块只使用内置依赖，独立CLI拒绝错误输入',async t=>{
  const root=await sandbox(t),declarations=resourceDeclarations(),tools=new Map(declarations.tools.map(x=>[x.id,x]));for(const platform of Object.values(contract.platforms))for(const tool of platform.tools){assert.equal(tools.get(tool.id)?.version,tool.version);}
  for(const tool of tools.values())for(const id of tool.requires||[])assert.ok(tools.has(id),'缺少递归工具 '+id);
- for(const name of ['node','posix','bash','grep','sed'])assert.ok(tools.has(name));const source=await readFile(new URL('./build.mjs',import.meta.url),'utf8');assert.doesNotMatch(source,/import\(['"]\.\.\//u);assert.ok([...source.matchAll(/^import .*? from ['"]([^'"]+)['"]/gmu)].every(m=>m[1].startsWith('node:')));
+ assert.deepEqual([...tools.keys()],['node']);assert.deepEqual(supplyRequirements().tools.map(tool=>tool.id),['node']);assert.equal(Object.hasOwn(supplyRequirements(),'apple'),false);
+ const source=await readFile(new URL('./build.mjs',import.meta.url),'utf8');assert.doesNotMatch(source,/import\(['"]\.\.\//u);assert.ok([...source.matchAll(/^import .*? from ['"]([^'"]+)['"]/gmu)].every(m=>m[1].startsWith('node:')));
  const result=spawnSync(process.execPath,[join(import.meta.dirname,'build.mjs'),'resources','unknown','--work',root,'--offline'],{env:{HOME:root,LANG:'C',PATH:''},encoding:'utf8'});assert.notEqual(result.status,0);assert.match(result.stderr,/平台|固定目录/);assert.deepEqual(await readdir(root),[]);
 });
 
@@ -1834,106 +1363,7 @@ test('资源子进程可取消，不能继续输出成功回执',async()=>{
  const signal=AbortSignal.timeout(150);await assert.rejects(runResourceProcess(process.execPath,['-e','setInterval(()=>{},1000)'],{signal,env:{PATH:''}}),/abort|timeout|取消/iu);
 });
 
-// 使用产品真实源码工具生产器；编译/Apple能力边界受控，文件事务和输出验真实际执行。
-const registry=resourceDeclarations();
-async function sourceFixture(t, behavior = {}) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'source-tool-')));
-  const owner = await lstat(root);
-  t.after(async () => {
-    const current = await lstat(root);
-    assert.equal(current.dev, owner.dev); assert.equal(current.ino, owner.ino);
-    await rm(root, { recursive: true, force: true });
-  });
-  const library = { root: join(root, 'tools'), work:join(root,'work'), tools: registry.tools };await mkdir(library.work);
-  const tool = structuredClone(registry.tools.find(tool => tool.id === 'perl'));
-  const bytes = Buffer.from('official-fixture-archive');
-  tool.archive.sha256 = createHash('sha256').update(bytes).digest('hex');
-  const pending = join(library.root, 'shared', tool.archive.sha256 + '.pending');
-  const payload = join(pending, 'payload'), source = join(pending, 'unpack', tool.archive.root);
-  const finalPayload = join(library.root, 'shared', tool.archive.sha256, 'payload');library.pending=pending;library.finalPayload=finalPayload;
-  const developerDirectory = join(root, 'Xcode.app/Contents/Developer');
-  const sdk = join(developerDirectory, 'Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk');
-  await mkdir(source, { recursive: true }); await mkdir(sdk, { recursive: true });
-  await writeFile(join(pending, 'archive'), bytes);
-  await writeFile(join(source, 'Artistic'), 'fixture upstream legal text');
-  // 本夹具只声明实际Configure安装路径和受控入口，不复制任何真实工具原件。
-  await writeFile(join(source,'config.sh'),
-    "installprivlib='"+finalPayload+"/lib/5.42.3'\ninstallarchlib='"+finalPayload+"/lib/5.42.3/aarch64-darwin'\n");
-  const posix=join(root,'verified/posix/bin');await mkdir(posix,{recursive:true});
-  for(const name of posixNames)await writeFile(join(posix,name),'fixture executable '+name,{mode:0o755});
-  // 完整基础工具交付属于夹具输入；不会复制或安装真实工具原件。
-  for(const id of ['bash','grep','sed']) {
-    const bin=join(root,'verified',id,'bin');await mkdir(bin,{recursive:true});
-    await writeFile(join(bin,id),'fixture executable '+id,{mode:0o755});
-  }
-  const calls = [];
-  const exec = async (command, args, options) => {
-    calls.push({ command, args, options });
-    if (command.endsWith('/xcrun')) return { stdout: sdk + '\n' };
-    if (args.includes('-MJSON::PP')) return { stdout: behavior.coreFails ? '' : 'controlled-perl-ok\n' };
-    if (behavior.compilerFails && args.includes('-j8')) throw new Error('compiler failed');
-    if (args.includes('install')) {
-      const destination = args.find(value => value.startsWith('DESTDIR=')).slice(8);
-      const staged = join(destination, finalPayload.slice(1));
-      await mkdir(join(staged, 'bin'), { recursive: true });
-      if (behavior.linkOutput) await symlink(join(pending, 'archive'), join(staged, 'bin/perl'));
-      else if (!behavior.missingOutput) {
-        const macho = Buffer.alloc(32); macho.writeUInt32LE(0xfeedfacf, 0); macho.writeUInt32LE(0x0100000c, 4);
-        await writeFile(join(staged, 'bin/perl'), macho, { mode: 0o755 });
-        await mkdir(join(staged, 'lib/5.42.3/aarch64-darwin'), { recursive: true });
-        await writeFile(join(staged, 'lib/5.42.3/aarch64-darwin/Config.pm'), 'fixture core module');
-      }
-    }
-    return { stdout: '' };
-  };
-  const input = { library, tool, pending, payload, source, archive: join(pending, 'archive'), finalPayload,
-    environment: { PATH: '/untrusted/bin', RUBYOPT: '-rmalicious', PYTHONPATH: '/untrusted',
-      DYLD_INSERT_LIBRARIES: '/untrusted', LD_PRELOAD: '/untrusted', ARCHFLAGS: '-arch x86_64', CFLAGS: 'malicious', PERL5OPT: '-Mmalicious' },
-    exec, verify: async (_, tool) => behavior.missingTool === tool.id ? null
-      : { path: join(root, 'verified', tool.id, 'bin', tool.command), version: tool.version },
-    apple: async () => ({ developerDirectory, version: '27.0',
-      tools: Object.fromEntries(['clang', 'clang++', 'ar', 'make', 'ld', 'as', 'nm', 'ranlib', 'strip', 'xcrun', 'otool', 'install_name_tool', 'codesign'].map(name => [name, join(developerDirectory, 'usr/bin', name)])) }),
-    // 产品依赖准备只返回归档映射，不创建旧工具库的originals目录。
-    prepare: async () => new Map() };
-  return { input, calls, bytes };
-}
-test('源码工具使用准确Apple编译入口并只在候选中收集输出、原件和编译输入', async t => {
-  const { input, calls, bytes } = await sourceFixture(t);
-  await buildSourceTool(input);
-  const configure = calls.find(call => call.args.includes('-des'));
-  assert.ok(configure.args.includes('-Dinstallusrbinperl=n'));
-  for (const key of ['RUBYOPT', 'PYTHONPATH', 'DYLD_INSERT_LIBRARIES', 'PERL5OPT', 'LD_PRELOAD']) assert.equal(configure.options.env[key], undefined);
-  assert.equal(configure.options.env.CFLAGS,'-O2');
-  assert.equal(configure.options.env.MACOSX_DEPLOYMENT_TARGET,registry.tools.find(t=>t.id==='posix').version);
-  assert.ok(configure.options.env.SDKROOT.startsWith(configure.options.env.DEVELOPER_DIR+'/'));
-  assert.equal(configure.options.env.CPP,configure.options.env.CC+' -E');
-  assert.ok(!configure.options.env.PATH.split(':').some(p=>['/usr/bin','/bin','/opt/homebrew/bin'].includes(p)));
-  assert.equal(configure.options.env.ARCHFLAGS, '-arch arm64');
-  assert.ok(configure.options.env.CC.startsWith(input.pending.split('/tools/')[0] + '/Xcode.app/'));
-  assert.ok(!configure.options.env.PATH.includes('/untrusted/'));
-  assert.ok(calls.some(call => call.args.includes('-MJSON::PP') && call.options.env.PERL5LIB.startsWith(input.payload + '/lib/')));
-  assert.equal(await readFile(join(input.payload, 'licenses/Artistic'), 'utf8'), 'fixture upstream legal text');
-});
-for (const behavior of [{ compilerFails: true }, { missingOutput: true }, { linkOutput: true }, { missingTool: 'node' }, { coreFails: true }]) {
-  test('源码工具失败边界保留失败且不写入最终工具对象：' + JSON.stringify(behavior), async t => {
-    const { input } = await sourceFixture(t, behavior);
-    await assert.rejects(buildSourceTool(input));
-    await assert.rejects(readFile(join(input.finalPayload, 'bin/perl')), { code: 'ENOENT' });
-  });
-}
-test('官方完整归档被替换时在任何编译前失败', async t => {
-  const { input, calls } = await sourceFixture(t);
-  await writeFile(input.archive, 'changed');
-  await assert.rejects(buildSourceTool(input), /归档摘要/);
-  assert.equal(calls.length, 0);
-});
-test('候选路径不属于当前工具摘要时在任何编译前失败', async t => {
-  const { input, calls } = await sourceFixture(t);
-  input.finalPayload += '-other';
-  await assert.rejects(buildSourceTool(input), /候选对象身份/);
-  assert.equal(calls.length, 0);
-});
-
+// Node 与 npm 原件仍按准确摘要入库，文件事务和输出验真实际执行。
 test('空可选供给不阻断产品取得，npm SRI原件按准确来源复用',async t=>{
  const root=await sandbox(t),body=Buffer.from('sri-original'),entry={url:'https://example.invalid/sri.tgz',integrity:'sha512-'+createHash('sha512').update(body).digest('base64')};
  const file=await acquireArchive(entry,{store:join(root,'first'),optional:join(root,'absent'),fetcher:async()=>new Response(body)});assert.equal(await readFile(file,'utf8'),'sri-original');

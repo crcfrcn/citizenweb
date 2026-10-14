@@ -225,9 +225,7 @@ node scripts/build.mjs describe
 
 `.github/workflows/web.yml` 由 GitHub main 的手动派发启动，在 Xcode 27 ARM64 Runner 上调用本仓 `scripts/build.mjs` 完成静态编译。YAML 在本轮 Runner 临时目录组包，以 `scripts/publish.mjs` 的 `inspectPackage` 核验三件正式资产，创建并回读本平台 Tag/Release。失败时只撤销本次创建的 Release 与 Tag。正式资产为 `citizenweb-release.tgz`、`release-manifest.json`、`SHA256SUMS`。不自动部署 Pages。
 
-Apple 工具由当前 `xcode-select` 指定的 Xcode 开发目录及 `xcrun --find` 定位；Xcode 内的编译器允许官方安装包自带的符号链接与硬链接，但解析后的目标必须仍在该开发目录且是可执行普通文件。核验后执行原工具入口路径，保留 `ar`、`clang++` 按入口名称选择的工作模式；系统工具仅接受固定 `/usr/bin` 入口。普通下载资源继续要求独占普通文件，两类来源不混用。
-
-锁定摘要验证后的 TAR 源码归档在隔离候选中按受限的官方成员时间恢复普通文件 mtime，保留 `configure.ac` 与已生成 `aclocal.m4` 的时间先后关系，避免 `make` 因解包时间重置而要求未登记的 Autotools。重复成员用有界集合拒绝，解包仍拒绝越界路径、特殊项和跨根链接。
+公民官网 Web Build 只声明并取得锁定的 Node 25.2.1 发行件，以及 `package-lock.json` 指定的 npm 原件；Node 与 npm/Vite 是静态页面编译的完整工具闭包。产品先对 Node 官方归档做固定 SHA-256 校验、隔离解包和入口核验，再从锁中准备 npm 离线缓存，运行本仓测试、`npm ci --ignore-scripts --offline` 与 Vite 构建。Git、POSIX、Bash、Grep、Sed 及其 Perl、Python、OpenSSL、Gettext、M4、Bison、Flex 原生源码构建不再属于 Web Build；GitHub 工作流与产品 Build 以同一 Node 只读接口核对固定 checkout 的独立 HEAD 与 GitHub Run SHA，不调用 Git CLI。正式 Release 三件资产、Pages 发布和独立工作现场规则不变。
 
 ### Publish
 
