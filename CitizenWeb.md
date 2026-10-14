@@ -225,7 +225,7 @@ node scripts/build.mjs describe
 
 `.github/workflows/web.yml` 由 GitHub main 的手动派发启动，在 Xcode 27 ARM64 Runner 上调用本仓 `scripts/build.mjs` 完成静态编译。YAML 在本轮 Runner 临时目录组包，以 `scripts/publish.mjs` 的 `inspectPackage` 核验三件正式资产，创建并回读本平台 Tag/Release。失败时只撤销本次创建的 Release 与 Tag。正式资产为 `citizenweb-release.tgz`、`release-manifest.json`、`SHA256SUMS`。不自动部署 Pages。
 
-Apple 工具由当前 `xcode-select` 指定的 Xcode 开发目录及 `xcrun --find` 定位；Xcode 内的编译器允许官方安装包自带的符号链接与硬链接，但解析后的目标必须仍在该开发目录且是可执行普通文件。系统工具仅接受固定 `/usr/bin` 入口。普通下载资源继续要求独占普通文件，两类来源不混用。
+Apple 工具由当前 `xcode-select` 指定的 Xcode 开发目录及 `xcrun --find` 定位；Xcode 内的编译器允许官方安装包自带的符号链接与硬链接，但解析后的目标必须仍在该开发目录且是可执行普通文件。核验后执行原工具入口路径，保留 `ar`、`clang++` 按入口名称选择的工作模式；系统工具仅接受固定 `/usr/bin` 入口。普通下载资源继续要求独占普通文件，两类来源不混用。
 
 ### Publish
 

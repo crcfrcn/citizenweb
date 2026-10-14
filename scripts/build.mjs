@@ -1177,7 +1177,8 @@ async function verifyAppleTools(library,{names=['xcodebuild'],signal,run=exec,en
     const actual=await realpath(path),info=await lstat(actual);
     // Xcode 内的 clang++ 等可为链接或硬链接；只接受解析后仍位于当前 Xcode 的可执行普通文件。
     if((system&&path!==system)||(!system&&!inside(developerDirectory,actual))||!info.isFile()||!(info.mode&0o111))fail('Apple工具身份无效：'+name);
-    tools[name]=actual;
+    // 执行时保留 ar、clang++ 等入口名；它们即使指向同一二进制，也可能按 argv[0] 选择不同模式。
+    tools[name]=path;
   }
   return {developerDirectory,version:wanted.version,tools};
  }
@@ -1767,7 +1768,7 @@ test('Apple 工具接受当前 Xcode 内的链接与硬链接并拒绝越界目�
  const library={tools:[{id:'xcode',version:'27.0'}]};
  const run=async(command,args)=>({stdout:(command==='/usr/bin/xcode-select'?developerDirectory:join(bin,args[1]))+'\n'});
  const result=await resourceSupport.verifyAppleTools(library,{names:['clang','clang++','ar'],run});
- assert.equal(result.tools['clang++'],join(bin,'clang'));assert.equal(result.tools.ar,join(bin,'ar'));
+ assert.equal(result.tools['clang++'],join(bin,'clang++'));assert.equal(result.tools.ar,join(bin,'ar'));
  await rm(join(bin,'clang++'));await writeFile(join(base,'outside'),'#!/bin/sh\n',{mode:0o755});await symlink(join(base,'outside'),join(bin,'clang++'));
  await assert.rejects(resourceSupport.verifyAppleTools(library,{names:['clang++'],run}),/路径越界|身份无效/u);
  await rm(join(bin,'clang++'));await writeFile(join(bin,'clang++'),'plain',{mode:0o600});
