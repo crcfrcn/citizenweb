@@ -227,6 +227,8 @@ node scripts/build.mjs describe
 
 Apple 工具由当前 `xcode-select` 指定的 Xcode 开发目录及 `xcrun --find` 定位；Xcode 内的编译器允许官方安装包自带的符号链接与硬链接，但解析后的目标必须仍在该开发目录且是可执行普通文件。核验后执行原工具入口路径，保留 `ar`、`clang++` 按入口名称选择的工作模式；系统工具仅接受固定 `/usr/bin` 入口。普通下载资源继续要求独占普通文件，两类来源不混用。
 
+锁定摘要验证后的 TAR 源码归档在隔离候选中按受限的官方成员时间恢复普通文件 mtime，保留 `configure.ac` 与已生成 `aclocal.m4` 的时间先后关系，避免 `make` 因解包时间重置而要求未登记的 Autotools。重复成员用有界集合拒绝，解包仍拒绝越界路径、特殊项和跨根链接。
+
 ### Publish
 
 `scripts/publish.mjs` 是本产品唯一正式渠道发布入口。准备阶段只通过公开 HTTPS 读取最新成功 Run 对应的正式资产，验真归档成员、版本和摘要；最终确认后再次读取并比对同一候选，只在本轮独占目录物化经清单约束的静态文件和原锁 Wrangler，调用控制台原生安全接口向既有 Pages 项目 `citizenweb` 的 `main` 生产环境上传，回读部署身份。它不导入 Build 或 Workflow，不创建 Release。Cloudflare Pages 官方 Direct Upload 要求 `CLOUDFLARE_ACCOUNT_ID` 与具备 Pages Edit 权限的 API Token；控制台准备冷签时读取真实的上一次 Pages 生产部署 ID，让离线钱包按既有 `previous_deployment_id` 字段准确展示；最终上传前再次回读同一 ID，变化即要求重签。控制台只在 Touch ID 与本次 QR 冷签后向锁定 Wrangler 的子进程交付令牌，不把值写进产品仓库或日志。[Cloudflare 官方说明](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/)
