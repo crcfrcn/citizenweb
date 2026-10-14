@@ -227,6 +227,8 @@ node scripts/build.mjs describe
 
 公民官网 Web Build 只声明并取得锁定的 Node 25.2.1 发行件，以及 `package-lock.json` 指定的 npm 原件；Node 与 npm/Vite 是静态页面编译的完整工具闭包。产品先对 Node 官方归档做固定 SHA-256 校验、隔离解包和入口核验，再从锁中准备 npm 离线缓存，运行本仓测试、`npm ci --ignore-scripts --offline` 与 Vite 构建。锁中标记 `inBundle` 且没有独立 URL/SRI 的依赖仅在逐级确认其父包存在并有锁定 SRI 时由父包 tarball 承载，孤儿或未锁定父包失败。Git、POSIX、Bash、Grep、Sed 及其 Perl、Python、OpenSSL、Gettext、M4、Bison、Flex 原生源码构建不再属于 Web Build；GitHub 工作流与产品 Build 以同一 Node 只读接口核对固定 checkout 的独立 HEAD 与 GitHub Run SHA，不调用 Git CLI。正式 Release 三件资产、Pages 发布和独立工作现场规则不变。
 
+`package-lock.json` 明确锁定可选 sharp WASM 依赖所需的 `@emnapi/runtime` 及其 SRI；即使目标平台不装 WASM 候选，`npm ci` 也先检查全锁闭包一致性，缺项必须修锁而不能跳过校验。
+
 白皮书正文函数在依赖安装前保持可单独加载；Vite 与 React/Tailwind 插件只在实际调用构建配置时动态加载，因此“先测试、再编译”的测试阶段无需预装前端依赖。测试子进程显式继承本轮测试会话身份，互斥和强制终止回归均针对同一个固定现场，不碰正式 build 工作根。
 
 ### Publish
