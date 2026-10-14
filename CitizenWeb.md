@@ -229,6 +229,8 @@ node scripts/build.mjs describe
 
 `package-lock.json` 明确锁定可选 sharp WASM 依赖所需的 `@emnapi/runtime` 及其 SRI；即使目标平台不装 WASM 候选，`npm ci` 也先检查全锁闭包一致性，缺项必须修锁而不能跳过校验。
 
+下载组件只导出 React 组件和页面消费的类型，公民链 Release 解析函数留在组件模块内部供按钮调用；产品回归从同一源码提取纯解析段，在测试副本中临时导出并注入合成 GitHub 回执，符合 Fast Refresh 的组件导出约束。
+
 白皮书正文函数在依赖安装前保持可单独加载；Vite 与 React/Tailwind 插件只在实际调用构建配置时动态加载，因此“先测试、再编译”的测试阶段无需预装前端依赖。测试子进程显式继承本轮测试会话身份，互斥和强制终止回归均针对同一个固定现场，不碰正式 build 工作根。
 
 ### Publish

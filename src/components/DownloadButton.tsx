@@ -30,7 +30,7 @@ const newer = (left: bigint[], right: bigint[]) => {
 }
 
 /** 不使用仓库级 latest：公民链四个平台各有自己的正式 Tag 和安装包。 */
-export async function resolveCitizenChainDownload(platform: CitizenChainPlatform, request: typeof fetch = fetch): Promise<string> {
+async function resolveCitizenChainDownload(platform: CitizenChainPlatform, request: typeof fetch = fetch): Promise<string> {
   const target = chainFiles[platform]
   if (!target) throw Error('公民链下载平台无效')
   const candidates: { rank: bigint[]; url: string; runID: number; attempt: number; sourceSHA: string }[] = []

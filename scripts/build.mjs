@@ -1482,7 +1482,8 @@ if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===imp
   const start=source.indexOf('export type CitizenChainPlatform'),end=source.indexOf('interface DownloadButtonProps');
   assert.ok(start>0&&end>start);
   const code=stripTypeScriptTypes(source.slice(start,end));
-  const {resolveCitizenChainDownload}=await import('data:text/javascript,'+encodeURIComponent(code));
+  assert.match(code,/async function resolveCitizenChainDownload/u);
+  const {resolveCitizenChainDownload}=await import('data:text/javascript,'+encodeURIComponent(code.replace('async function resolveCitizenChainDownload','export async function resolveCitizenChainDownload')));
   const sha='b'.repeat(40),digest='a'.repeat(64);
   const target={macos:['macOS','dmg','macos.yml'],windows:['Windows','exe','windows.yml'],
    'linux-arm':['LinuxARM','deb','linuxarm.yml'],'linux-amd':['LinuxAMD','deb','linuxamd.yml']};
