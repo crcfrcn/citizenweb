@@ -31,8 +31,8 @@ const systems: ProductSystem[] = [
     tech: 'Dart / Flutter / iOS / Android',
     color: 'gold',
     downloads: [
-      { label: 'iOS', kind: 'store', message: '请前往 App Store 搜索「公民 CitizenApp」下载安装。' },
-      { label: 'Android', kind: 'file', downloadPath: '/download/citizenapp/android' },
+      { label: 'iOS', kind: 'store' },
+      { label: 'Android', kind: 'store' },
     ],
   },
   {
@@ -53,8 +53,8 @@ const systems: ProductSystem[] = [
     color: 'gold',
     fullWidth: false,
     downloads: [
-      { label: 'iOS', kind: 'store', message: '请前往 App Store 搜索「公民钱包 CitizenWallet」下载安装。' },
-      { label: 'Android', kind: 'file', downloadPath: '/download/citizenwallet/android' },
+      { label: 'iOS', kind: 'store' },
+      { label: 'Android', kind: 'store' },
     ],
   },
   {

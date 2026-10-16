@@ -115,13 +115,13 @@ node scripts/build.mjs describe
 #### 3.4. 产品页下载按钮
 
 - 产品页（`pages/Ecosystem.tsx`）三卡右上角各有醒目「下载」按钮（金色 `text-gold-400`、`text-xl`、加粗），点击弹出平台下拉（`components/DownloadButton.tsx`，自带点击外部关闭）。
-- 公民与公民钱包 Android 继续使用既有同源 `/api${downloadPath}`；iOS 继续显示商店提示，不改变两产品下载路径。
+- 公民与公民钱包的 iOS、Android 首次安装只从官网进入各自应用商店。四个准确商品页尚未公开时，平台项显示“未上架”且不可点击；后续只在本页填入已核验的商店商品 URL，直接导航，不使用服务端下载路径、GitHub APK 资产或搜索结果页。应用内更新属于产品自身流程。
 - 公民链四个平台在浏览器直接读取 GitHub 公开 Release 列表，逐件核对本平台正式 Tag、自动化证明、版本、唯一安装包、摘要与准确 `browser_download_url`，并回读候选对应的 GitHub Run 成功终态。按版本、Run 与 Attempt 选最新有效正式版；选择平台后直接导航至 GitHub 安装包，不经 CitizenServe、D1 指针或官网文件代理。缺少正式版、列表超限、GitHub 查询失败及错误资产均显示错误，不回退其它平台或源码归档。
 - 各卡公开选项：
-  - 公民 CitizenApp：`iOS`（弹提示去 App Store，无直链）/ `Android` → `/download/citizenapp/android`
-  - 公民钱包 CitizenWallet：`iOS`（弹提示）/ `Android` → `/download/citizenwallet/android`
+  - 公民 CitizenApp：`iOS`、`Android` 各有独立商店项；未上架时禁用。
+  - 公民钱包 CitizenWallet：`iOS`、`Android` 各有独立商店项；未上架时禁用。
   - 公民链 CitizenChain：macOS 下载 `.dmg`、Windows 下载 `.exe`、LinuxARM 和 LinuxAMD 各下载本架构 `.deb`；平台键仅用于选择准确 GitHub Release，不形成公民链服务端下载请求。
-- iOS 为纯提示文案（`window.alert`），暂无 App Store 直链。
+- 移动端不再出现商店搜索提示或服务端下载回退。商店正式页发布并核实身份后，才为对应平台开放链接。
 
 #### 3.5. 标签页标题与图标
 

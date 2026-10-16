@@ -1,10 +1,9 @@
 import { useState } from 'react'
 
-/** 移动端沿用既有同源入口；公民链节点从 GitHub 正式 Release 直接下载。 */
+/** 移动端仅由官网提供商店入口；公民链节点从 GitHub 正式 Release 直接下载。 */
 export type CitizenChainPlatform = 'macos' | 'windows' | 'linux-arm' | 'linux-amd'
 export type DownloadOption =
-  | { label: string; kind: 'store'; message: string }
-  | { label: string; kind: 'file'; downloadPath: string }
+  | { label: string; kind: 'store'; url?: string }
   | { label: string; kind: 'github-release'; platform: CitizenChainPlatform }
 
 const chainFiles: Record<CitizenChainPlatform, { stem: string; extension: string; workflow: string }> = {
@@ -182,20 +181,28 @@ export default function DownloadButton({ productLabel, options }: DownloadButton
             className="absolute right-0 z-50 mt-2 min-w-[168px] overflow-hidden rounded-xl border border-gold-500/30 bg-navy-950/95 shadow-2xl shadow-black/40 backdrop-blur-xl"
           >
             {options.map((option) =>
-              option.kind === 'store' ? (
+              option.kind === 'store' ? option.url ? (
+                <a
+                  key={option.label}
+                  role="menuitem"
+                  href={option.url}
+                  onClick={() => setOpen(false)}
+                  className="block w-full px-4 py-3 text-left text-sm font-medium text-slate-200 no-underline transition-colors hover:bg-white/5 hover:text-gold-300"
+                >
+                  {option.label}
+                </a>
+              ) : (
                 <button
                   key={option.label}
                   type="button"
                   role="menuitem"
-                  onClick={() => {
-                    setOpen(false)
-                    window.alert(option.message)
-                  }}
-                  className="block w-full px-4 py-3 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-white/5 hover:text-gold-300"
+                  disabled
+                  aria-label={`${productLabel} ${option.label} 尚未上架`}
+                  className="block w-full px-4 py-3 text-left text-sm font-medium text-slate-400 opacity-60"
                 >
-                  {option.label}
+                  {option.label} · 未上架
                 </button>
-              ) : option.kind === 'github-release' ? (
+              ) : (
                 <button
                   key={option.label}
                   type="button"
@@ -207,16 +214,6 @@ export default function DownloadButton({ productLabel, options }: DownloadButton
                 >
                   {pending === option.platform ? '正在查询…' : option.label}
                 </button>
-              ) : (
-                <a
-                  key={option.label}
-                  role="menuitem"
-                  href={`/api${option.downloadPath}`}
-                  onClick={() => setOpen(false)}
-                  className="block w-full px-4 py-3 text-left text-sm font-medium text-slate-200 no-underline transition-colors hover:bg-white/5 hover:text-gold-300"
-                >
-                  {option.label}
-                </a>
               ),
             )}
             {error && <p role="alert" className="px-4 py-2 text-xs text-red-300">{error}</p>}

@@ -1473,10 +1473,19 @@ if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===imp
  }));
 }
 
-// 只运行下载组件的纯解析段；合成GitHub回执不触发真实网络或产品编译。
+// 下载回归只读取本仓真实组件与页面；合成GitHub回执不触发真实网络或产品编译。
 if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===import.meta.filename){
  const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict');
  const {stripTypeScriptTypes}=await import('node:module');
+ test('移动端未上架时只保留官网商店选项，不请求旧下载路由',()=>{
+  const page=readFileSync(join(root,'src/pages/Ecosystem.tsx'),'utf8');
+  const button=readFileSync(join(root,'src/components/DownloadButton.tsx'),'utf8');
+  assert.equal([...page.matchAll(/kind: 'store'/gu)].length,4);
+  assert.doesNotMatch(page,/downloadPath|kind: 'file'|\/download\/citizen(?:app|wallet)/u);
+  assert.doesNotMatch(button,/window\.alert|downloadPath|kind: 'file'|href=\{`\/api/u);
+  assert.match(button,/option\.url\s*\?/u);
+  assert.match(button,/disabled\s+aria-label=\{`\$\{productLabel\} \$\{option\.label\} 尚未上架`\}/u);
+ });
  test('公民链平台下载直达最新成功Run的唯一GitHub正式安装包',async()=>{
   const source=readFileSync(join(root,'src/components/DownloadButton.tsx'),'utf8');
   const start=source.indexOf('export type CitizenChainPlatform'),end=source.indexOf('interface DownloadButtonProps');
