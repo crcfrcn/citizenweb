@@ -273,7 +273,7 @@ export function resourceEnvironment(platform,work,receipt,base={}){
  env.NODE=receipt.tools.node.path;
  env.PATH=dirname(receipt.tools.node.path);
  env.CITIZENWEB_WORK_DIR=work;env.CITIZENWEB_PROJECT_ROOT=join(work,'source');env.PRODUCT_SOURCE_DIR=env.CITIZENWEB_PROJECT_ROOT;
- env.CITIZENWEB_RESOURCE_MODE=base.PRODUCT_RESOURCE_FD==='4'?'provided':env.CITIZENWEB_RESOURCE_MODE||'independent';
+ env.CITIZENWEB_RESOURCE_MODE=env.CITIZENWEB_RESOURCE_MODE||'independent';
  const execution=executions.getStore();if(execution)execution.buildEnvironment=env;
  return env;
 }
@@ -389,9 +389,9 @@ export function outputDigest(path) {
 }
 
 // 宿主完整Build先由调用方消费回执、安装并收尾；独立执行由本产品清空现场。
-// 本仓完整Build在资源回执后运行自己的测试，控制台不选择测试清单。
+// 本产品拥有测试清单、资源准备和执行顺序。
 function testFiles(){return ['scripts/build.mjs','scripts/publish.mjs'];}
-// 产品在资源回执后运行自身Node回归；控制台只调用完整Build。
+// 本产品独立拥有此实现，通过自身公开接口执行。
 async function runProductTests(platform,work,receipt,base){
  const env=resourceEnvironment(platform,work,receipt,base),node=receipt.tools.node;
  if(!node||node.version!==contract.platforms[platform].tools.find(value=>value.id==='node')?.version
@@ -445,7 +445,7 @@ export async function execute(platform,work,request={},options={}) {
   const result=await executeTask(platform,work,request,options);
   if(options.consume)await options.consume(result);
   return result;
- },{run_id:request.run_id,environment,retain:environment.PRODUCT_RESOURCE_FD==='4'||environment.PRODUCT_HOST_FD==='3'});
+ },{run_id:request.run_id,environment});
 }
 async function executeTask(platform,work,request={},options={}) {
  checkWork(work);platformContract(platform);
@@ -459,15 +459,11 @@ async function executeTask(platform,work,request={},options={}) {
  if(existsSync(resultFile))fail('本轮完整Build已有结果，禁止复用旧终态');
  const handle=openSync(lock,'wx',0o600);closeSync(handle);
  const cancellation=new AbortController(),abort=()=>cancellation.abort();options.signal?.addEventListener('abort',abort,{once:true});if(options.signal?.aborted)abort();
- const state={signal:cancellation.signal,cancellation,host:options.host,unconfirmed:false,finished:false};
+ const state={signal:cancellation.signal,cancellation,unconfirmed:false,finished:false};
  try{return await executions.run(state,async()=>{
   const stages=options.stages||{requirements,resources,prepare,build};
   const resourcesOptions={signal:state.signal,offline:Boolean(options.offline),environment:options.environment||process.env};
 
-  if((options.environment||process.env).PRODUCT_RESOURCE_FD==='4'){
-   state.resourceClient=options.resourceClient||createResourceSupplyClient(new Socket({fd:4,readable:true,writable:true}),state.signal);
-   resourcesOptions.supply=previous=>state.resourceClient({previous});
-  }
   await stages.requirements(platform,work);state.signal.throwIfAborted();
   let receipt=await stages.resources(platform,work,request,resourcesOptions);state.signal.throwIfAborted();
   if(!options.stages)await runProductTests(platform,work,receipt,resourcesOptions.environment);
@@ -478,7 +474,7 @@ async function executeTask(platform,work,request={},options={}) {
   const result=await stages.build(platform,work,receipt,resourcesOptions.environment);state.signal.throwIfAborted();
   checkBuildResult(result,platform,work,request.run_id);
   writeFileSync(resultFile,JSON.stringify(result)+'\n',{flag:'wx',mode:0o600});return result;
- });}catch(error){if(String(error?.message).includes('退出未确认'))state.unconfirmed=true;throw error;}finally{state.finished=true;state.socket?.destroy();state.resourceClient?.close?.();options.signal?.removeEventListener('abort',abort);if(!state.unconfirmed){unlinkSync(lock);if(!options.consume&&(options.environment||process.env).PRODUCT_RESOURCE_FD!=='4'&&(options.environment||process.env).PRODUCT_HOST_FD!=='3')clearWork(work);}}
+ });}catch(error){if(String(error?.message).includes('退出未确认'))state.unconfirmed=true;throw error;}finally{state.finished=true;options.signal?.removeEventListener('abort',abort);if(!state.unconfirmed){unlinkSync(lock);if(!options.consume)clearWork(work);}}
 }
 export function checkBuildResult(value,platform,work,runId) {
  // 官网本机编译仅验证Web候选，Sites交付与正式归档不由此入口宣布完成。
@@ -513,11 +509,11 @@ export function cleanShellPaths(args,environment=process.env){
 
 async function runCLI(){
  const [operation,platform,flag,work]=process.argv.slice(2);
- if(operation==='execute'&&process.env.PRODUCT_RESOURCE_FD!=='4'){if(flag!=='--work'||work!==fixedWork('build/'+platform))fail('平台编译现场不符');return withFixedWork('build/'+platform,()=>runCommand(),{environment:process.env,retain:process.env.PRODUCT_HOST_FD==='3'});}
+ if(operation==='execute'){if(flag!=='--work'||work!==fixedWork('build/'+platform))fail('平台编译现场不符');return withFixedWork('build/'+platform,()=>runCommand(),{environment:process.env});}
  if(operation==='execute')return runCommand();
  if(['resources','prepare','build'].includes(operation)&&flag==='--work'){
   checkWork(work);
-  return withFixedWork(taskScope(work),()=>runCommand(),{environment:process.env,retain:process.env.PRODUCT_HOST_FD==='3'||process.env.PRODUCT_RESOURCE_FD==='4'});
+  return withFixedWork(taskScope(work),()=>runCommand(),{environment:process.env});
  }
  return runCommand();
 }
@@ -548,14 +544,11 @@ async function runCommand(){
   let input='';for await(const chunk of process.stdin){input+=chunk;if(Buffer.byteLength(input)>2*1024*1024)fail('公开输入超限');}
   const request=input?JSON.parse(input):{},options={environment:process.env,signal:cancellation.signal,offline:extra.includes('--offline')};
   let result;
-  if(command==='execute'&&process.env.PRODUCT_RESOURCE_FD==='4'){
-   if(process.env.PRODUCT_RESOURCE_FD!=='4')fail('编译资源供给通道缺失');
-   result=await execute(platform,work,request,options);
-  }else if(command==='execute'){
+  if(command==='execute'){
    const node=await bootstrapNode(work,options);
    if(createHash('sha256').update(readFileSync(process.execPath)).digest('hex')!==createHash('sha256').update(readFileSync(node.path)).digest('hex')){
-    const environment=Object.fromEntries(['HOME','USER','LOGNAME','LANG','LC_ALL','PRODUCT_TOOL_ROOT','PRODUCT_DEPENDENCY_ROOT','PRODUCT_HOST_FD','PRODUCT_WORK_LEASE'].filter(k=>typeof process.env[k]==='string').map(k=>[k,process.env[k]]));
-    result=JSON.parse((await runBuildProcess(node.path,[fileURLToPath(import.meta.url),command,platform,option,work,...extra],workEnvironment(environment),root,{capture:true,streamError:true,input:JSON.stringify(request),signal:cancellation.signal,passHost:environment.PRODUCT_HOST_FD==='3'})).stdout);
+    const environment=Object.fromEntries(['HOME','USER','LOGNAME','LANG','LC_ALL','PRODUCT_WORK_LEASE'].filter(k=>typeof process.env[k]==='string').map(k=>[k,process.env[k]]));
+    result=JSON.parse((await runBuildProcess(node.path,[fileURLToPath(import.meta.url),command,platform,option,work,...extra],workEnvironment(environment),root,{capture:true,streamError:true,input:JSON.stringify(request),signal:cancellation.signal})).stdout);
    }else result=await execute(platform,work,request,options);
   }else if(command==='resources')result=await resources(platform,work,request,options);
   else result=await executions.run({signal:cancellation.signal},()=>command==='prepare'?prepare(platform,work,request,process.env):build(platform,work,request,process.env));
@@ -592,7 +585,7 @@ async function rm(path,options) {
  return removeResourcePath(path,options);
 }
 function runResourceProcess(command,args,{signal,maxBuffer=8*1024**2,timeout=3600000,encoding='utf8',quietOutput=false,...options}={}) {
- const supplied=resourceSupplies.getStore();if(supplied&&!supplied.preparingTool){if(typeof supplied.runCommand!=='function')fail('供给未交付执行能力');return supplied.runCommand(command,args,{...options,maxBuffer,timeout,encoding,quietOutput,signal});}
+
 
  signal?.throwIfAborted();
  if(!Number.isSafeInteger(maxBuffer)||maxBuffer<=0||!Number.isSafeInteger(timeout)||timeout<=0)throw Error('资源进程边界参数无效');
@@ -714,7 +707,7 @@ async function resourceWork(work) {
  checkScratchPath(path);return directory(join(path,'resource-pending'),true);
 }
 async function acquireArchive(entry,{store,work,optional,offline=false,fetcher=fetch,signal,maxBytes=4*1024**3}={}){
- const supplied=resourceSupplies.getStore();if(supplied)return supplied.acquireOriginal(entry,{kind:store===join(supplied.toolRoot,'archives')?'tool':'dependency',offline,signal,maxBytes});
+
  const url=checkedURL(entry.url);digestSpec(entry);await directory(store,true);const coordinate=hash(JSON.stringify([url,entry.sha256||entry.integrity]));const target=join(store,coordinate+'.blob');
  const check=async path=>{await regular(path);const b=await readFile(path);if(!b.length||b.length>maxBytes)fail('原件大小超限');verifyBytes(b,entry);return path;};
  if(await stat(target))return check(target);
@@ -755,16 +748,21 @@ async function verifyToolObject(directory,tool){
  }
 const directoryCheck=path=>directory(path);
 async function commitCandidate(pending,target,{signal,verify}={}){
- const supplied=resourceSupplies.getStore();if(supplied){if(typeof supplied.publishCandidate!=='function')fail('供给未交付提交能力');return supplied.publishCandidate(pending,target);}
+
 
  // 下载与编译已完成后才取得短锁；等待可取消，已有对象永不覆盖。
  const lock=target+'.lock';let handle;for(let n=0;n<500;n++){signal?.throwIfAborted();try{handle=await open(lock,'wx',0o600);break;}catch(e){if(e.code!=='EEXIST')throw e;await new Promise(r=>setTimeout(r,20));}}if(!handle)fail('原件提交锁等待超限');
  try{signal?.throwIfAborted();if(await stat(target)){if(verify)await verify(target);}else await rename(pending,target);}finally{await handle.close();await rm(lock);}
 }
+// 准备产物身份与使用验收由本产品定义，供应端不解释组件布局。
+function toolSupplyKey(tool){const archive=toolArchive(tool);if(tool.id==='node')return archive.sha256;return archive.sha256+'-'+objectRecipe(tool);}
+
+
+
 async function installTool(library,tool,options){
  const archive=toolArchive(tool);if(library.installed.has('node'))return library.installed.get('node');
- const supplied=resourceSupplies.getStore();
- if(supplied&&!supplied.preparingTool){const value=await supplied.acquireTool(supplyRequirements().tools[0]);library.installed.set('node',value);return value;}
+
+
  const shared=join(library.root,'shared');await directory(shared,true);
  const target=join(shared,archive.sha256+'-'+objectRecipe(tool)),verify=path=>verifyToolObject(path,tool);
  let value=await verify(target);
@@ -827,23 +825,16 @@ async function bootstrapNode(work,options={}) {
  if(inside(root,store)||inside(store,root)||inside(work,store)||inside(store,work)||store===work)fail('启动原件库边界交叉');
  const library={root:join(store,'tools'),work,tools:toolDefinitions,installed:new Map()};await directory(library.root,true);
  const context={environment,offline:false,fetcher:fetch,...options,library,
-  optionalDependencies:environment.PRODUCT_DEPENDENCY_ROOT?join(environment.PRODUCT_DEPENDENCY_ROOT,'objects'):undefined};
+  optionalDependencies:undefined};
  return installTool(library,toolDefinitions.find(x=>x.id==='node'),context);
 }
 
-async function resources(platform,work,previous={},options={}){
- if(options.supply){const receipt=await options.supply(previous);if(receipt?.run_id!==previous.run_id)fail('资源供给任务身份不符');const owner=buildPublic;owner.resourceEnvironment(platform,work,receipt,options.environment||{});return receipt;}
- return materializeResources(platform,work,previous,options);
-}
-async function prepareResourceSupply(platform,work,previous,options){
- if(!options||typeof options.acquireOriginal!=='function'||!options.toolRoot||!options.dependencyRoot)fail('供给准备缺少公开能力');
- const receipt=await resourceSupplies.run({...options,work},()=>materializeResources(platform,work,previous,options));
- receipt.environment??={};receipt.environment["CITIZENWEB_RESOURCE_MODE"]='provided';return receipt;
-}
+async function resources(platform,work,previous={},options={}){return resourceSupplies.run({work},()=>materializeResources(platform,work,previous,options));}
+async function prepareResourceSupply(platform,work,previous,options){return resources(platform,work,previous,options);}
 async function materializeResources(platform,work,previous={},options={}){
  const owner=buildPublic;owner.checkWork(work);const request=()=>owner.requirements(platform,work);const requirement=request(),environment=options.environment||process.env;
  if(previous.schema!==undefined&&(previous.schema!==1||previous.product_id!==requirement.product_id||previous.platform!==platform||previous.work!==work))fail('资源请求身份无效');options={environment,fetcher:fetch,offline:false,...options};options.signal?.throwIfAborted();
- const store=options.storeRoot||join(homedir(),'.local/share/product-resources'),optionalDependencies=options.dependencyRoot?join(options.dependencyRoot,'objects'):environment.PRODUCT_DEPENDENCY_ROOT?join(environment.PRODUCT_DEPENDENCY_ROOT,'objects'):undefined;
+ const store=options.storeRoot||join(homedir(),'.local/share/product-resources'),optionalDependencies=options.dependencyRoot?join(options.dependencyRoot,'objects'):undefined;
  await directory(store,true);if(inside(root,store)||inside(store,root)||inside(work,store)||inside(store,work)||store===work)fail('原件库与源码或工作区交叉');
  // tools承载工具发行件/编译输入，rely承载产品依赖原件；不把可写任务缓存混入任一原件库。
  const library={root:options.toolRoot||join(store,'tools'),work,tools:toolDefinitions,requested:requirement.tools,installed:new Map()};await directory(library.root,true);options={...options,platform,optionalDependencies,library,dependencyRoot:options.dependencyRoot||join(store,'rely'),sources:requirement.sources};
@@ -862,29 +853,17 @@ async function materializeResources(platform,work,previous={},options={}){
 // 公开声明与候选配方；供给对象的领取、提交及删除只由调度方实现。
 function supplyRequirements(){
  const node=toolDefinitions.find(tool=>tool.id==='node');
- return {tools:[{...node,slots:[node.archive.executable]}]};
+ return {tools:[{...node,cache_key:toolSupplyKey(node),slots:[node.archive.executable]}]};
 }
 function assertWorkQuiescent(work){for(const pid of supplyGroups.get(work)||[])try{process.kill(-pid,0);fail('资源工具退出未确认');}catch(error){if(error.code!=='ESRCH')throw error;}if(retainedResourcePath(work))fail('资源工具退出未确认');}
-async function prepareToolSupply(tool,{original,payload,work,signal,offline,acquireOriginal,publishCandidate,environment}){
- if(tool?.id!=='node'||tool.version!==toolDefinitions[0].version
-   ||JSON.stringify(tool.archive)!==JSON.stringify(toolDefinitions[0].archive)
-   ||JSON.stringify(tool.requires)!=='[]')fail('Web工具配方只接受锁定Node');
- const at=await fixedScratch(join(work,'.tool-recipe-'+tool.id+'-'+randomUUID()));
- const library={root:at,work,tools:toolDefinitions,installed:new Map(),requested:[],};
- const context={work,toolRoot:at,dependencyRoot:join(work,'dependencies'),acquireOriginal,publishCandidate,preparingTool:true};
- try{return await resourceSupplies.run(context,async()=>{
-  const value=await installTool(library,toolDefinitions[0],{library,signal,offline,environment});
-  const built=value.path.slice(0,-tool.archive.executable.length-1);await chmod(built,0o700);await rm(payload,{recursive:true,force:true});await rename(built,payload);
-  return {schema:1,id:tool.id,version:tool.version,payload,original};
- });}finally{assertWorkQuiescent(work);await rm(at,{recursive:true,force:true});}
-}
+
 
 // Build 仅公开 Node、npm 原锁所需的资源能力；门禁策略归门禁文件。
 const resourceSupport=Object.freeze({root,hash,safePath,inside,stat,regular,directory,permissions,directoryCheck,retainedResourcePath,toolDefinitions,toolArchive,objectRecipe,verifyToolObject,prepareNpm,bundledOwner,cleanEnvironment,runResourceProcess,inventory,acquireArchive,extractArchive,resources,rm});
 
-return Object.freeze({runResourceProcess,inventory,acquireArchive,extractArchive,readDependencySupply,resourceDeclarations,bootstrapNode,resources,prepareResourceSupply,supplyRequirements,assertWorkQuiescent,prepareToolSupply,resourceSupport});
+return Object.freeze({runResourceProcess,inventory,acquireArchive,extractArchive,readDependencySupply,resourceDeclarations,bootstrapNode,resources,prepareResourceSupply,supplyRequirements,assertWorkQuiescent,resourceSupport});
 })();
-export const {runResourceProcess,inventory,acquireArchive,extractArchive,readDependencySupply,resourceDeclarations,bootstrapNode,resources,prepareResourceSupply,supplyRequirements,assertWorkQuiescent,prepareToolSupply,resourceSupport}=resourceRuntime;
+export const {runResourceProcess,inventory,acquireArchive,extractArchive,readDependencySupply,resourceDeclarations,bootstrapNode,resources,prepareResourceSupply,supplyRequirements,assertWorkQuiescent,resourceSupport}=resourceRuntime;
 
 export function productTestSources(){return ['scripts/build.mjs'];}
 export async function productTests({signal}={}){
@@ -1061,7 +1040,7 @@ test('未经本产品锁声明的归档回执不能用于编译',async()=>{
  }finally{removeFixture(work,{recursive:true});}
 });
 
-// 真实命令行只读自身入口；清除私有环境与工具搜索路径，不能从控制台补齐执行条件。
+// 本产品独立拥有此实现，通过自身公开接口执行。
 test('独立命令行从自身声明输出JSON，未知平台失败且不写工作根',async()=>{
  const work=sandbox();try{
   for(const platform of Object.keys(contract.platforms)){
@@ -1187,50 +1166,12 @@ test('产品Node输入拒绝源码根链接、输出父链接和外部源码链�
 
 
 // 完整宿主通道由调用方核验结果并收尾；独立执行仍必须立即清空。
-test('宿主完整Build在调用方消费前保留成功或失败现场，独立入口仍清空',async()=>{
- const platform=Object.keys(contract.platforms)[0],declared=contract.platforms[platform];
- for(const [host,failure] of [['3',false],['3',true],['4',false],[undefined,false]]){
-  const work=sandbox();try{
-   let result;
-   const stages={requirements:()=>{},resources:async()=>({}),prepare:async()=>{writeFixture(join(work,'partial'),'本轮现场');if(failure)throw Error('宿主失败夹具');},build:async()=>{
-    result={schema:1,product_id:contract.product_id,platform,work,completion:declared.completion,run_id:'123456789',files:declared.files.map(name=>{const path=join(work,name);mkdirSync(dirname(path),{recursive:true});writeFixture(path,'当前产物');return {path,sha256:outputDigest(path)};})};return result;
-   }};
-   const pending=execute(platform,work,{run_id:'123456789'},{stages,environment:host?{PRODUCT_HOST_FD:host}:{}});
-   if(failure)await assert.rejects(pending,/宿主失败夹具/);else assert.deepEqual(await pending,result);
-   assert.equal(existsSync(join(work,'.product-build.lock')),false);
-   if(host==='3'){
-    assert.equal(existsSync(join(work,'partial')),true);
-    if(!failure){assert.equal(existsSync(join(work,'build-result.json')),true);for(const file of result.files)assert.equal(outputDigest(file.path),file.sha256);}
-    clearWork(work);
-   }
-   assert.equal(existsSync(work),false);
-  }finally{removeFixture(work,{recursive:true,force:true});}
- }
-});
+
 
 }
 
 // 供给模式只接收所属任务资源，通道失败不切换为独立准备。
-export function createResourceSupplyClient(stream,signal){
- let buffer='',sequence=0,pending=null,closed=false;
- const reject=message=>{closed=true;if(pending){clearTimeout(pending.timer);pending.reject(Error(message));pending=null;}stream.destroy();};
- const abort=()=>reject('资源供给已取消');
- signal?.addEventListener('abort',abort,{once:true});
- stream.setEncoding?.('utf8');
- stream.on('data',chunk=>{buffer+=chunk.toString();if(Buffer.byteLength(buffer)>2*1024**2)return reject('资源供给回执超限');
-  let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);
-   try{const reply=JSON.parse(line);if(!pending||reply.id!==pending.id||Object.keys(reply).sort().join(',')!==(reply.ok===true?'id,ok,value':'error,id,ok'))throw Error();
-    const entry=pending;pending=null;clearTimeout(entry.timer);if(reply.ok!==true){entry.reject(Error(reply.error));reject('资源供给失败');return;}entry.resolve(reply.value);
-   }catch{reject('资源供给帧或请求身份无效');return;}
-  }
- });
- stream.on('error',()=>reject('资源供给通道失败'));stream.on('end',()=>reject('资源供给通道中断'));stream.on('close',()=>reject('资源供给通道中断'));
- const request=value=>new Promise((resolve,rejectPromise)=>{if(closed||pending||signal?.aborted)return rejectPromise(Error('资源供给不可用，禁止独立下载'));
-  const id=String(++sequence),timer=setTimeout(()=>reject('资源供给超时'),7200000);pending={id,timer,resolve,reject:rejectPromise};
-  stream.write(JSON.stringify({...value,id,operation:'prepare'})+'\n');
- });
- request.close=()=>{signal?.removeEventListener('abort',abort);reject('资源供给已关闭');};return request;
-}
+
 
 // 本仓本机编译正文只有此处一份；不生成独立编译脚本。
 
@@ -1464,13 +1405,7 @@ if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===imp
  const {test,after}=await import('node:test'),{default:assert}=await import('node:assert/strict'),{execFileSync}=await import('node:child_process');
  const {mkdir,writeFile,chmod,lstat,readdir,rename}=await import('node:fs/promises');
  after(async()=>{await withFixedWork('build/'+Object.keys(contract.platforms)[0],async()=>{});});
- for(const failure of [false,true])test('编译供给候选归属与失败收尾：'+failure,()=>withFixedWork('test',async work=>{
-  const tool=supplyRequirements().tools.find(tool=>tool.id==='node'),base=join(work,'fixture');await mkdir(join(base,tool.archive.root,'bin'),{recursive:true});await writeFile(join(base,tool.archive.root,'bin/node'),'#!/bin/sh\nexit 0\n',{mode:0o755});
-  const archive=join(work,'fixture.tgz');execFileSync('/usr/bin/tar',['-czf',archive,'-C',base,tool.archive.root]);const payload=join(work,'payload');await mkdir(payload);let acquired=0,committed=0;
-  const options={original:archive,payload,work,environment:{HOME:work},acquireOriginal:async entry=>{acquired++;assert.equal(entry.url,tool.archive.url);if(failure)throw Error('原件缺失');return archive;},acquireTool:()=>assert.fail('Node无前置工具'),acquireApple:()=>assert.fail('Node不需要Apple'),publishCandidate:async(candidate,target)=>{assert.ok(candidate.startsWith(work+'/')&&target.startsWith(work+'/'));committed++;await mkdir(dirname(target),{recursive:true});await rename(candidate,target);}};
-  if(failure)await assert.rejects(prepareToolSupply(tool,options),/原件缺失/);else{const result=await prepareToolSupply(tool,options);assert.equal(result.payload,payload);assert.ok((await lstat(join(payload,'bin/node'))).mode&0o111);assert.equal(committed,1);}
-  assert.equal(acquired,1);assert.equal((await readdir(work)).some(name=>name.startsWith('.tool-recipe-')),false);
- }));
+
 }
 
 // 下载回归只读取本仓真实组件与页面；合成GitHub回执不触发真实网络或产品编译。
@@ -1533,18 +1468,16 @@ if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===imp
 }
 
 
-// 本产品独立拥有自动化的派发、观察、取消与恢复；控制台只交付任务宿主和仓库授权。
+// 本产品公开GitHub接口只使用普通参数与返回值；平台流程及终态处理归本仓。
 const automationRepository='crcfrcn/citizenweb';
 const automationWorkflows=Object.freeze({"web":"web.yml"});
-const automationObservers=new WeakMap();
-const automationReconnect=new WeakSet();
+
+
 function automationRoute(route,action){
  const workflow=automationWorkflows[route?.platform];
  if(!workflow||route.repository!==contract.product_id||route.product!==contract.product_id||route.workflow!==workflow
   ||route.canonicalId!==`${contract.product_id}.${route.platform}.release`||route.flow!=='release'
-  ||action&&(action.id!==`${contract.product_id}-release-${route.platform}`||action.canonicalId!==route.canonicalId
-   ||action.flow!=='release'||action.platform!==route.platform||action.productId!==contract.product_id
-   ||action.authorizationLevel!==2||action.production===true))
+  )
   throw Error('产品自动化目标与声明不一致');
  return workflow;
 }
@@ -1556,18 +1489,7 @@ function automationRun(run,workflow,id){
   throw Error('产品 GitHub Run 身份不一致');
  return run;
 }
-async function automationToken(route,actionId,security,task){
- if(typeof security!=='function')throw Error('产品自动化缺少仓库授权');
- const payload={repository:automationRepository,purpose:'workflow',action_id:actionId,platform:route.platform,
-  ...(task?{run_id:task.id,recovery_run_id:task.id}:{})};
- const response=await security('github.repository.token',{payload_base64:Buffer.from(JSON.stringify(payload)).toString('base64')});
- if(response?.ok!==true||!response.values)throw Error('产品 GitHub 仓库授权失败');
- const token=Buffer.from(response.values['repository-main:TOKEN']||'','base64').toString('utf8');
- const expiresAt=Number(Buffer.from(response.values['repository-main:EXPIRES_AT']||'','base64').toString('utf8'));
- if(!/^ghs_[^\s\u0000-\u001f\u007f]{1,2044}$/u.test(token)||!Number.isSafeInteger(expiresAt)||expiresAt<=Date.now()/1000)
-  throw Error('产品 GitHub 短期授权无效');
- return {token,expiresAt};
-}
+
 function automationSafe(value,token){return String(value??'').split(token||'\0').join('[已脱敏]').replace(/gh[sopur]_[A-Za-z0-9_]+/gu,'[已脱敏]').slice(0,4000);}
 async function automationRequest(path,token,{method='GET',body,fetchImpl=fetch,signal}={}){
  if(typeof path!=='string'||path.startsWith('/')||path.includes('..')||/[\r\n]/u.test(path))throw Error('产品 GitHub 路径无效');
@@ -1595,177 +1517,22 @@ export async function dispatchProductAutomation(platform,token,{inputs={},fetchI
  await accepted?.(value);
  return automationRun(await automationRequest(`actions/runs/${value.workflow_run_id}`,token,{fetchImpl}),workflow,value.workflow_run_id);
 }
-async function automationLogs(run,token,host,task){
- const first=await fetch(`https://api.github.com/repos/${automationRepository}/actions/runs/${run.id}/logs`,{
-  redirect:'manual',credentials:'omit',headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json',
-   'X-GitHub-Api-Version':'2026-03-10','User-Agent':contract.product_id},signal:AbortSignal.timeout(30000)});
- if(first.status===404)return;
- let response=first;
- if(first.status===302){const url=new URL(first.headers.get('location'));
-  if(url.protocol!=='https:'||url.username||url.password)throw Error('产品 GitHub 日志下载地址无效');
-  response=await fetch(url,{redirect:'error',credentials:'omit',signal:AbortSignal.timeout(60000)});
- }
- if(!response.ok||!response.body)throw Error('产品 GitHub 日志读取失败');
- let size=0;const chunks=[];for await(const chunk of response.body){size+=chunk.length;if(size>32*1024*1024)throw Error('产品 GitHub 日志归档超限');chunks.push(chunk);}
- const bytes=Buffer.concat(chunks),{inflateRawSync}=await import('node:zlib');
- let end=-1;for(let at=bytes.length-22;at>=Math.max(0,bytes.length-65558);at--)if(bytes.readUInt32LE(at)===0x06054b50){end=at;break;}
- if(end<0)throw Error('产品 GitHub 日志 ZIP 目录无效');
- const count=bytes.readUInt16LE(end+10);if(count>2000)throw Error('产品 GitHub 日志文件过多');
- let at=bytes.readUInt32LE(end+16),total=0;
- for(let i=0;i<count;i++){
-  if(at+46>bytes.length||bytes.readUInt32LE(at)!==0x02014b50)throw Error('产品 GitHub 日志成员无效');
-  const flags=bytes.readUInt16LE(at+8),method=bytes.readUInt16LE(at+10),packed=bytes.readUInt32LE(at+20),length=bytes.readUInt32LE(at+24);
-  const nameSize=bytes.readUInt16LE(at+28),extra=bytes.readUInt16LE(at+30),comment=bytes.readUInt16LE(at+32),local=bytes.readUInt32LE(at+42);
-  const name=bytes.subarray(at+46,at+46+nameSize).toString('utf8');at+=46+nameSize+extra+comment;
-  total+=length;if(flags&1||![0,8].includes(method)||length>32*1024*1024||total>128*1024*1024
-   ||local+30>bytes.length||bytes.readUInt32LE(local)!==0x04034b50)throw Error('产品 GitHub 日志结构无效');
-  const start=local+30+bytes.readUInt16LE(local+26)+bytes.readUInt16LE(local+28);
-  if(start+packed>bytes.length)throw Error('产品 GitHub 日志内容越界');
-  const data=method===0?bytes.subarray(start,start+packed):inflateRawSync(bytes.subarray(start,start+packed),{maxOutputLength:length});
-  if(data.length!==length)throw Error('产品 GitHub 日志大小不一致');
-  if(name.endsWith('.txt')){host.report(task,`GitHub日志：${automationSafe(name,token)}`);
-   for(const line of data.toString('utf8').split(/\r?\n/u))if(line)host.report(task,automationSafe(line,token));}
- }
-}
-function automationIdentity(task,route,workflow,run){
- Object.assign(task,{repository:route.repository,productId:route.product,platform:route.platform,flow:'release',mode:'release',
-  githubRepository:automationRepository,githubWorkflow:workflow,githubRunId:run.id,githubRunNumber:run.run_number,
-  githubRunAttempt:run.run_attempt,githubRunUrl:run.html_url,sourceSHA:run.head_sha,githubRemoteStatus:run.status,recovered:false});
-}
-function automationRecoveryCall(task,route,host){
- return typeof host.recoverTask==='function'?host.recoverTask(task):recoverAutomation(task,route,host);
-}
-function automationRetry(task,route,host){
- if(!task.active||automationReconnect.has(task))return;
- automationReconnect.add(task);
- // 调度任务经宿主重新建立授权上下文；独立调用才直接走本产品恢复入口。
- const timer=setTimeout(()=>{
-  automationReconnect.delete(task);
-  if(!task.active||!task.recovered)return;
-  void Promise.resolve().then(()=>automationRecoveryCall(task,route,host)).catch(error=>{
-    if(!task.active)return;
-    task.recovered=true;host.report(task,'原 Run 重连未完成：'+automationSafe(error.message));host.changed(task);
-    automationRetry(task,route,host);
-  });
- },120000);
- timer.unref?.();
-}
-async function observeProductAutomation(task,route,host,access){
- const workflow=automationRoute(route),jobs=new Map();automationObservers.set(task,access);
- try{while(task.active){
-  const run=automationRun(await automationRequest(`actions/runs/${task.githubRunId}`,access.token),workflow,task.githubRunId);
-  if(task.sourceSHA&&run.head_sha!==task.sourceSHA)throw Error('产品 Run 提交身份已变化');
-  automationIdentity(task,route,workflow,run);host.changed(task);
-  const state=run.status==='completed'?(run.conclusion==='success'?'成功':'失败'):run.status;
-  if(task.automationLastState!==state){host.report(task,'GitHub：'+state);task.automationLastState=state;host.changed(task);}
-  const result=await automationRequest(`actions/runs/${run.id}/jobs?per_page=100`,access.token);
-  if(!Array.isArray(result?.jobs))throw Error('产品 GitHub Job 列表无效');
-  for(const job of result.jobs){const key=job.status+':'+job.conclusion;
-   if(jobs.get(job.id)!==key){jobs.set(job.id,key);host.report(task,`${automationSafe(job.name,access.token)}：${automationSafe(job.conclusion||job.status,access.token)}`);}}
-  if(run.status==='completed'){
-   try{await automationLogs(run,access.token,host,task);}catch{host.report(task,'GitHub 终态已确认；本次日志下载未完成，请查看 Run 链接');}
-   await host.finish(task,task.cancelRequested?1:run.conclusion==='success'?0:1,
-    task.cancelRequested?`任务已取消；塔塔自动化终态：${run.conclusion}`:run.conclusion==='success'?'塔塔自动化成功':`塔塔自动化失败：${run.conclusion}`);
-   await host.refresh?.(route.repository,host.security);return;
-  }
-  await new Promise(resolve=>setTimeout(resolve,5000));
- }}catch(error){if(task.active){task.recovered=true;host.report(task,automationSafe(error.message,access.token)+'；将重新连接原 Run');host.changed(task);automationRetry(task,route,host);}}
- finally{automationObservers.delete(task);}
-}
-function cancelProductAutomation(task,route,host){
- if(task.remoteCancelOperation)return task.remoteCancelOperation;
- const operation=cancelProductAutomationOnce(task,route,host).catch(error=>{
-  if(task.active){task.recovered=true;host.report(task,automationSafe(error.message)+'；将重新连接原 Run');host.changed(task);automationRetry(task,route,host);}
-  throw error;
- });
- task.remoteCancelOperation=operation;
- void operation.finally(()=>{if(task.remoteCancelOperation===operation)delete task.remoteCancelOperation;}).catch(()=>{});
- return operation;
-}
-async function cancelProductAutomationOnce(task,route,host){
- const workflow=automationRoute(route);
- if(!task.active||task.repository!==route.repository||task.platform!==route.platform||task.githubRepository!==automationRepository
-  ||task.githubWorkflow!==workflow||task.canonicalId!==route.canonicalId)throw Error('产品自动化取消身份无效');
- task.cancelRequested=true;host.changed(task);
- if(!task.githubRunId)return {id:task.id,closed:true};
- const remembered=automationObservers.get(task);
- const access=remembered?.expiresAt>Date.now()/1000?remembered:await automationToken(route,task.actionId,host.security,task);
- let run=automationRun(await automationRequest(`actions/runs/${task.githubRunId}`,access.token),workflow,task.githubRunId);
- if(task.sourceSHA&&run.head_sha!==task.sourceSHA)throw Error('产品自动化取消提交身份已变化');
- const already=run.status==='completed';
- if(!already){try{await automationRequest(`actions/runs/${run.id}/cancel`,access.token,{method:'POST'});}catch(error){
-  run=automationRun(await automationRequest(`actions/runs/${task.githubRunId}`,access.token),workflow,task.githubRunId);
-  if(run.status!=='completed')throw error;}}
- for(let i=0;i<60&&run.status!=='completed';i++){await new Promise(resolve=>setTimeout(resolve,5000));run=automationRun(await automationRequest(`actions/runs/${task.githubRunId}`,access.token),workflow,task.githubRunId);}
- if(run.status!=='completed'){
-  host.report(task,'普通取消未收口，执行原 Run 强制取消');
-  await automationRequest(`actions/runs/${task.githubRunId}/force-cancel`,access.token,{method:'POST'});
-  for(let i=0;i<60&&run.status!=='completed';i++){await new Promise(resolve=>setTimeout(resolve,5000));run=automationRun(await automationRequest(`actions/runs/${task.githubRunId}`,access.token),workflow,task.githubRunId);}
- }
- if(run.status!=='completed')throw Error('产品 GitHub 取消尚无远端终态，任务保持活动');
- if(task.active){task.githubRemoteStatus=run.status;await host.finish(task,1,(already?'取消时塔塔自动化已结束：':'任务已取消；塔塔自动化终态：')+run.conclusion);}
- return {id:task.id,closed:true};
-}
-export async function startAutomation(route,action,host){
- const workflow=automationRoute(route,action);
- const existing=host.listTasks().find(task=>task.active&&task.recovered&&task.githubRunId&&task.repository===route.repository&&task.platform===route.platform);
- if(existing)return recoverAutomation(existing,route,host);
- const access=await automationToken(route,action.id,host.security);
- const task=host.createTask({moduleFile:action.file,canonicalId:route.canonicalId,actionId:action.id,title:action.taskName,moduleId:action.productId});
- Object.assign(task,{repository:route.repository,productId:route.product,platform:route.platform,mode:'release',flow:'release',security:host.security});
- task.cancel=()=>cancelProductAutomation(task,route,host);task.secrets.push(access.token);host.created(task);host.report(task,'调用所属仓 '+workflow);
- try{
-  const run=await dispatchProductAutomation(route.platform,access.token,{accepted:value=>{
-   Object.assign(task,{githubRunId:value.workflow_run_id,githubRunUrl:value.html_url,githubRepository:automationRepository,githubWorkflow:workflow});host.changed(task);
-  }});
-  automationIdentity(task,route,workflow,run);host.changed(task);host.report(task,'GitHub 已接收：'+run.html_url);
-  if(task.cancelRequested)void cancelProductAutomation(task,route,host);
-  else void observeProductAutomation(task,route,host,access);
- }catch(error){
-  if(task.githubRunId){task.recovered=true;host.report(task,'原 Run 已接收，后续读取中断；将重新连接');host.changed(task);automationRetry(task,route,host);}
-  else await host.finish(task,1,automationSafe(error.message,access.token));
- }
- return {id:task.id};
-}
-export async function recoverAutomation(task,route,host){
- const workflow=automationRoute(route);
- if(!task?.active||task.mode!=='release'||task.repository!==route.repository||task.platform!==route.platform
-  ||task.canonicalId!==route.canonicalId||task.githubRepository!==automationRepository||task.githubWorkflow!==workflow
-  ||!Number.isSafeInteger(task.githubRunId)||task.githubRunId<1||!/^[0-9a-f]{40}$/u.test(task.sourceSHA||''))
-  throw Error('产品自动化恢复身份无效');
- task.cancel=()=>cancelProductAutomation(task,route,host);task.security=host.security;task.recovered=true;host.changed(task);
- try{const access=await automationToken(route,task.actionId,host.security,task);
-  task.secrets.push(access.token);task.recovered=false;host.changed(task);
-  if(task.cancelRequested)void cancelProductAutomation(task,route,host);
-  else void observeProductAutomation(task,route,host,access);
- }catch(error){task.recovered=true;host.report(task,'原 Run 自动恢复未完成：'+automationSafe(error.message));host.changed(task);automationRetry(task,route,host);}
- return {id:task.id};
-}
+
+
+
+
+
+
+
+
+
 
 
 // 回归夹具只模拟产品所属仓的 GitHub 响应，不派发真实任务。
 if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2){
  const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict');
- test('产品自动化只接受本仓声明的平台、动作和 Workflow',()=>{
-  const platform=Object.keys(automationWorkflows)[0],workflow=automationWorkflows[platform];
-  const route={repository:contract.product_id,product:contract.product_id,platform,workflow,canonicalId:`${contract.product_id}.${platform}.release`,flow:'release'};
-  const action={id:`${contract.product_id}-release-${platform}`,canonicalId:route.canonicalId,flow:'release',
-   platform,productId:contract.product_id,authorizationLevel:2,production:false};
-  assert.equal(automationRoute(route,action),workflow);
-  assert.throws(()=>automationRoute({...route,workflow:'other.yml'},action),/声明/);
-  assert.throws(()=>automationRoute({...route,platform:'other'},action),/声明/);
-  assert.throws(()=>automationRoute(route,{...action,id:'other'}),/声明/);
-  assert.throws(()=>automationRoute(route,{...action,platform:'other'}),/声明/);
-  assert.throws(()=>automationRoute(route,{...action,productId:'other'}),/声明/);
-  assert.throws(()=>automationRoute(route,{...action,authorizationLevel:1}),/声明/);
-  assert.throws(()=>automationRoute(route,{...action,production:true}),/声明/);
- });
- test('控制台恢复经过宿主上下文，独立恢复仍校验产品身份',async()=>{
-  const task={id:77};let called=0;
-  assert.equal(await automationRecoveryCall(task,null,{recoverTask:value=>{called++;return value.id;}}),77);
-  assert.equal(called,1);
-  await assert.rejects(automationRecoveryCall(task,null,{}),/声明/);
- });
+
+
  test('派发只接收准确 Run 回执，读回失败不补发',async()=>{
   const platform=Object.keys(automationWorkflows)[0],workflow=automationWorkflows[platform],id=123;
   const run={id,path:`.github/workflows/${workflow}`,event:'workflow_dispatch',head_branch:'main',head_sha:'a'.repeat(40),
@@ -1786,81 +1553,34 @@ if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2){
   await assert.rejects(dispatchProductAutomation(platform,'fixture-token',{fetchImpl:ambiguous,accepted:()=>accepted++}),/未确认/);
   assert.equal(accepted,1); // 接收后读回失败仍只派发一次，原 Run 坐标已交付调用方。
  });
- test('Run 观察核对终态与 Job；伪造身份保留原任务并安排恢复',async()=>{
-  const platform=Object.keys(automationWorkflows)[0],workflow=automationWorkflows[platform],id=123;
-  const route={repository:contract.product_id,product:contract.product_id,platform,workflow,
-   canonicalId:`${contract.product_id}.${platform}.release`,flow:'release'};
-  const run={id,path:`.github/workflows/${workflow}`,event:'workflow_dispatch',head_branch:'main',head_sha:'a'.repeat(40),
-   repository:{full_name:automationRepository},html_url:`https://github.com/${automationRepository}/actions/runs/${id}`,
-   run_number:1,run_attempt:1,status:'completed',conclusion:'success'};
-  const original=globalThis.fetch,events=[];
-  const host={report:(_task,message)=>events.push(message),changed:()=>{},finish:async(task,code)=>{task.active=false;events.push(`完成:${code}`);}};
-  const task={id:7,active:true,githubRunId:id,sourceSHA:run.head_sha};
-  try{
-   globalThis.fetch=async url=>{
-    if(String(url).endsWith('/logs'))return new Response(null,{status:404});
-    if(String(url).includes('/jobs?'))return Response.json({jobs:[{id:1,name:'构建',status:'completed',conclusion:'success'}]});
-    return Response.json(run);
-   };
-   await observeProductAutomation(task,route,host,{token:'ghs_fixture',expiresAt:Math.ceil(Date.now()/1000)+60});
-   assert.equal(task.active,false);assert.ok(events.some(value=>value.includes('构建：success')));
-   assert.ok(events.includes('完成:0'));
-   const forged={...run,repository:{full_name:'other/repo'}};
-   const bad={id:8,active:true,githubRunId:id,sourceSHA:run.head_sha};
-   globalThis.fetch=async()=>Response.json(forged);
-   await observeProductAutomation(bad,route,host,{token:'ghs_fixture',expiresAt:Math.ceil(Date.now()/1000)+60});
-   assert.equal(bad.recovered,true);assert.equal(bad.active,true);bad.active=false;
-  }finally{globalThis.fetch=original;}
- });
- test('取消仅作用原 Run；过期授权重新领取，恢复不再次派发',async()=>{
-  const platform=Object.keys(automationWorkflows)[0],workflow=automationWorkflows[platform],id=123;
-  const route={repository:contract.product_id,product:contract.product_id,platform,workflow,
-   canonicalId:`${contract.product_id}.${platform}.release`,flow:'release'};
-  const actionId=`${contract.product_id}-release-${platform}`,sha='a'.repeat(40);
-  const run={id,path:`.github/workflows/${workflow}`,event:'workflow_dispatch',head_branch:'main',head_sha:sha,
-   repository:{full_name:automationRepository},html_url:`https://github.com/${automationRepository}/actions/runs/${id}`,
-   run_number:1,run_attempt:1,status:'in_progress',conclusion:null};
-  const token='ghs_fixture',originalFetch=globalThis.fetch,originalTimer=globalThis.setTimeout;
-  const calls=[],payloads=[];
-  const security=async(_name,{payload_base64})=>{
-   payloads.push(JSON.parse(Buffer.from(payload_base64,'base64').toString('utf8')));
-   return {ok:true,values:{'repository-main:TOKEN':Buffer.from(token).toString('base64'),
-    'repository-main:EXPIRES_AT':Buffer.from(String(Math.ceil(Date.now()/1000)+3600)).toString('base64')}};
+
+
+}
+
+// 外部调用方使用普通参数和返回值；此公开接口不接收任务宿主。
+export const automationClient=Object.freeze({automationRepository,automationWorkflows,automationRoute,automationRun,automationSafe,automationRequest,dispatchProductAutomation});
+
+// 合成回归只在本文件作为测试入口时注册；普通导入不要求调度器、其它仓库或外部服务。
+if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===import.meta.filename){
+ const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict');
+ test('独立自动化接口不接收任务宿主，准确派发与错误回执只请求一次',async()=>{
+  const api=automationClient,workflows=api.automationWorkflows||api.automationWorkflow;
+  const platform=Object.keys(workflows)[0],workflow=workflows[platform],repository=api.automationRepository;
+  const dispatch=api.dispatchAutomation||api.dispatchProductAutomation||api.dispatch;
+  let dispatches=0,mode='success';
+  const run={id:731,run_number:1,run_attempt:1,path:'.github/workflows/'+workflow,event:'workflow_dispatch',head_branch:'main',
+   head_sha:'a'.repeat(40),repository:{full_name:repository},status:'completed',conclusion:'success',
+   html_url:'https://github.com/'+repository+'/actions/runs/731'};
+  const fetchImpl=async(url,options)=>{
+   if(new URL(url).pathname.endsWith('/dispatches')){
+    dispatches++;assert.equal(options.method,'POST');
+    return mode==='ambiguous'?new Response(null,{status:204}):Response.json({workflow_run_id:731,html_url:run.html_url});
+   }
+   assert.ok(new URL(url).pathname.endsWith('/runs/731'));
+   return Response.json(mode==='wrong'?{...run,head_sha:'invalid'}:run);
   };
-  const host={security,report:()=>{},changed:()=>{},finish:async(task,code)=>{task.active=false;task.resultCode=code;}};
-  const task={id:7,active:true,mode:'release',repository:route.repository,platform,canonicalId:route.canonicalId,
-   actionId,githubRepository:automationRepository,githubWorkflow:workflow,githubRunId:id,sourceSHA:sha,secrets:[]};
-  try{
-   globalThis.fetch=async(url,options)=>{
-    const path=String(url);calls.push([path,options.method||'GET']);
-    if(path.endsWith(`/actions/runs/${id}/cancel`))return new Response(null,{status:202});
-    if(path.endsWith('/logs'))return new Response(null,{status:404});
-    if(path.includes('/jobs?'))return Response.json({jobs:[]});
-    return Response.json(calls.some(([,method])=>method==='POST')?{...run,status:'completed',conclusion:'cancelled'}:run);
-   };
-   // 夹具仅缩短取消轮询等待；正式轮询仍保持原间隔。
-   globalThis.setTimeout=(callback,delay,...args)=>delay===5000?originalTimer(callback,0,...args):originalTimer(callback,delay,...args);
-   automationObservers.set(task,{token:'ghs_expired',expiresAt:0});
-   await cancelProductAutomation(task,route,host);
-   assert.equal(task.active,false);assert.equal(task.resultCode,1);
-   assert.equal(payloads.length,1);assert.equal(payloads[0].run_id,task.id);
-   assert.equal(payloads[0].recovery_run_id,task.id);
-   assert.equal(calls.filter(([,method])=>method==='POST').length,1);
-   assert.ok(calls.some(([path])=>path.endsWith(`/actions/runs/${id}/cancel`)));
-   assert.ok(calls.every(([path])=>path.includes(`/repos/${automationRepository}/`)));
-   const recovery={...task,active:true,cancelRequested:false,recovered:true,secrets:[]};
-   calls.length=0;
-   globalThis.fetch=async(url,options)=>{
-    const path=String(url);calls.push([path,options.method||'GET']);
-    if(path.endsWith('/logs'))return new Response(null,{status:404});
-    if(path.includes('/jobs?'))return Response.json({jobs:[]});
-    return Response.json({...run,status:'completed',conclusion:'success'});
-   };
-   const completed=new Promise(resolve=>{host.finish=async(value,code)=>{value.active=false;resolve(code);};});
-   await recoverAutomation(recovery,route,host);
-   assert.equal(await completed,0);assert.equal(typeof recovery.cancel,'function');
-   assert.equal(calls.filter(([,method])=>method==='POST').length,0);
-   assert.ok(calls.some(([path])=>path.endsWith(`/actions/runs/${id}`)));
-  }finally{globalThis.fetch=originalFetch;globalThis.setTimeout=originalTimer;}
+  const invoke=()=>api.automationTransport?api.automationTransport.run({fetchImpl},()=>dispatch(platform,'fixture',{fetchImpl})):dispatch(platform,'fixture',{fetchImpl});
+  assert.equal((await invoke()).id,731);assert.equal(dispatches,1);
+  for(const failure of ['ambiguous','wrong']){mode=failure;dispatches=0;await assert.rejects(invoke);assert.equal(dispatches,1);}
  });
 }

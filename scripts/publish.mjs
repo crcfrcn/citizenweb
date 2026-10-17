@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// 官网发布只读核验已完成自动化的公开正式资产；Tag、Release及云部署均不属于此入口。
+// 官网发布独立核验成功自动化的正式资产，拥有Pages上传与部署回读；不创建Tag或Release。
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {spawn} from 'node:child_process';
-import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,rm,writeFile,realpath,lstat,readFile} from 'node:fs/promises';
 import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -114,18 +114,113 @@ async function selectedPublication(request,includeContents=false){
 export async function preparePublication({request=publicRequest}={}){return selectedPublication(request);}
 
 // 正式发布重新读取并验真同一个 Release；只在本轮独占目录物化经过清单约束的成员。
-async function runTool(command,args,cwd,environment,signal){
+
+// 产品拥有工具执行、云请求及失败回执；凭据只驻留本轮内存，不写入命令行或日志。
+async function runTool(command,args,cwd,environment,signal,{input,protectedValues=[],timeout=300000}={}){
+ signal?.throwIfAborted();
  return new Promise((resolve,reject)=>{
-  const child=spawn(command,args,{cwd,env:environment,signal,stdio:['ignore','pipe','pipe']});let tail='',failure;
-  for(const stream of [child.stdout,child.stderr])stream.on('data',chunk=>{tail=(tail+chunk.toString('utf8')).slice(-2048);});
-  child.on('error',error=>{failure=error;});
-  child.on('close',code=>code===0?resolve():reject(Error('官网发布工具失败：'+(failure?.code??code)+' '+tail.replace(/[\x00-\x1f\x7f]/gu,' ').slice(-512))));
+  const child=spawn(command,args,{cwd,env:environment,detached:true,stdio:[input===undefined?'ignore':'pipe','pipe','pipe']});
+  let output='',diagnostic='',failure,timer,forced;
+  const stop=()=>{try{if(child.pid)process.kill(-child.pid,'SIGTERM');}catch(error){if(error.code!=='ESRCH')failure??=error;}
+   forced??=setTimeout(()=>{try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{}},5000);forced.unref();};
+  const abort=()=>{failure??=signal.reason??Error('发布已取消');stop();};
+  child.stdout.on('data',chunk=>{if(!protectedValues.length)output=(output+chunk.toString('utf8')).slice(-65536);});
+  child.stderr.on('data',chunk=>{if(!protectedValues.length)diagnostic=(diagnostic+chunk.toString('utf8')).slice(-4096);});
+  child.once('error',error=>{failure??=error;});
+  child.once('close',(code,termination)=>{
+   clearTimeout(timer);clearTimeout(forced);signal?.removeEventListener('abort',abort);
+   if(child.pid){try{process.kill(-child.pid,0);failure??=Error('发布工具后代未退出');process.kill(-child.pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')failure??=error;}}
+   if(failure||code!==0||termination){
+    const detail=protectedValues.length?'':diagnostic.replace(/[\x00-\x1f\x7f]/gu,' ').slice(-1024);
+    const error=Error('发布工具失败：'+(failure?.code??code)+'，信号='+(termination||'无')+(failure?'；'+(failure.code||failure.message):'')+(detail?'；'+detail:''),{cause:failure});
+    reject(error);
+   }else resolve(output);
+  });
+  signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
+  timer=setTimeout(()=>{failure??=Error('发布工具超时');stop();},timeout);timer.unref();
+  if(input!==undefined){child.stdin.on('error',error=>{failure??=error;stop();});child.stdin.end(input);}
  });
 }
-export function publishTools(){return [{id:'node',version:'25.2.1'}];}
-export async function publishPages({proof,runID,nodePath,previousID,security,signal,beforeDeploy,request=publicRequest,install=runTool}={}){
+async function publicationFile(work,name,maximum=128*1024**2){
+ const path=join(work,name),info=await lstat(path);
+ if(!info.isFile()||info.isSymbolicLink()||await realpath(path)!==path||info.size<1||info.size>maximum)fail('发布现场成员无效：'+name);
+ return readFile(path);
+}
+function deploymentCredentials(credentials,{secrets=false}={}){
+ if(!credentials||typeof credentials!=='object'||Array.isArray(credentials)
+  ||Object.keys(credentials).sort().join('\0')!==(secrets?['account','secrets','token']:['account','token']).join('\0')
+  ||!/^[a-f0-9]{32}$/u.test(credentials.account||'')||typeof credentials.token!=='string'||credentials.token.length<20
+  ||/[\s\x00-\x1f\x7f]/u.test(credentials.token))fail('本轮部署凭据无效');
+ return credentials;
+}
+async function cloudflareJSON(account,token,path,{request=fetch,signal}={}){
+ const response=await request('https://api.cloudflare.com/client/v4/accounts/'+account+'/'+path,
+  {method:'GET',redirect:'error',credentials:'omit',headers:{Authorization:'Bearer '+token},
+   signal:signal?AbortSignal.any([signal,AbortSignal.timeout(30000)]):AbortSignal.timeout(30000)});
+ if(!response.ok)fail('Cloudflare公开回读失败（HTTP '+response.status+'）');
+ const chunks=[];let size=0;for await(const chunk of response.body){size+=chunk.length;if(size>4*1024**2)fail('Cloudflare回读超限');chunks.push(chunk);}
+ let value;try{value=JSON.parse(Buffer.concat(chunks));}catch{fail('Cloudflare回读JSON无效');}
+ if(value?.success!==true)fail('Cloudflare回读未确认成功');return value.result;
+}
+
+// 发布阶段的资源策略与验收归本产品，供应端不补来源或选择离线策略。
+export async function publishTools(){
+ const version='25.2.1';if(process.version!=='v'+version)fail('发布入口必须使用本产品锁定Node '+version);
+ return {node:{version,path:process.execPath}};
+}
+
+// 上传与验收归本产品；调度方的deploy回调只承担凭据通道，调用的仍是此入口。
+export async function deployPages(payload,credentials,{signal,invoke=runTool,request=fetch,now=Date.now}={}){
+ signal?.throwIfAborted();
+ if(!exact(payload,['schema','product_id','platform','run_id','release_tag','source_sha','version','archive_sha256','previous_deployment_id','work','node_path'])
+  ||payload.schema!==1||payload.product_id!=='citizenweb'||payload.platform!=='web'
+  ||!/^[1-9][0-9]{8}$/u.test(payload.run_id||'')||!/^\d+\.\d+\.\d+$/u.test(payload.version||'')
+  ||!new RegExp('^citizenweb-web-v'+payload.version.replaceAll('.','\\.')+'-r[1-9][0-9]*-a[1-9][0-9]*$','u').test(payload.release_tag||'')
+  ||!/^[a-f0-9]{40}$/u.test(payload.source_sha||'')||!sha(payload.archive_sha256)
+  ||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(payload.previous_deployment_id||''))fail('Pages执行身份无效');
+ const {work,node_path:node}=payload,base=fileURLToPath(new URL('../target/publish/web/',import.meta.url));
+ if(typeof work!=='string'||!work.startsWith(base+payload.run_id+'-')||await realpath(work)!==work
+  ||typeof node!=='string'||!node.startsWith('/')||await realpath(node)!==node||!(await lstat(node)).isFile())fail('Pages执行现场无效');
+ const {account,token}=deploymentCredentials(credentials),environment={PATH:dirname(node)+':/usr/bin:/bin',HOME:work,CI:'1',WRANGLER_SEND_METRICS:'false'};
+ let manifest,marker,source,lock;
+ try{manifest=JSON.parse(await publicationFile(work,'release-manifest.json',1024**2));marker=JSON.parse(await publicationFile(work,'dist/citizenweb-release.json',4096));
+  source=JSON.parse(await publicationFile(work,'package.json'));lock=JSON.parse(await publicationFile(work,'package-lock.json'));}catch(error){throw Error('官网发布现场JSON无效',{cause:error});}
+ if(manifest.product_id!=='citizenweb'||manifest.delivery_channel!=='web'||manifest.software_version!==payload.version||manifest.git_commit_sha!==payload.source_sha
+  ||!sha(manifest.assets_sha256)||!Array.isArray(manifest.files)||manifest.files.length<4||manifest.files.length>10000
+  ||stable(marker)!==stable({product_id:'citizenweb',delivery_channel:'web',software_version:payload.version,git_commit_sha:payload.source_sha,assets_sha256:manifest.assets_sha256})
+  ||source.version!==payload.version||lock.version!==payload.version||lock.packages?.['']?.version!==payload.version
+  ||source.devDependencies?.wrangler!=='4.121.0'||lock.packages?.['node_modules/wrangler']?.version!=='4.121.0')fail('Pages正式清单或产品锁不一致');
+ const seen=new Set(),assets=[];let total=0;
+ for(const row of manifest.files){
+  if(!exact(row,['path','sha256'])||typeof row.path!=='string'||!row.path.match(/^(?:package(?:-lock)?\.json|dist\/[A-Za-z0-9._/-]+)$/u)
+   ||row.path.split('/').some(part=>!part||part==='.'||part==='..')||seen.has(row.path)||!sha(row.sha256))fail('Pages正式成员无效');
+  seen.add(row.path);const bytes=await publicationFile(work,row.path);total+=bytes.length;
+  if(total>256*1024**2||digest(bytes)!==row.sha256)fail('Pages正式成员与清单不一致');
+  if(row.path.startsWith('dist/')&&row.path!=='dist/citizenweb-release.json')assets.push(row);
+ }
+ if(!seen.has('dist/index.html')||!seen.has('dist/citizenweb-release.json')||digest(Buffer.from(stable(assets)))!==manifest.assets_sha256)fail('Pages正式页面不完整');
+ const wrangler=join(work,'node_modules/wrangler/bin/wrangler.js');await publicationFile(work,'node_modules/wrangler/bin/wrangler.js');
+ if((await invoke(node,['--version'],work,environment,signal)).trim()!=='v25.2.1'
+  ||!(await invoke(node,[wrangler,'--version'],work,environment,signal)).includes('4.121.0'))fail('Pages执行工具不符合产品锁');
+ const read=path=>cloudflareJSON(account,token,'pages/projects/citizenweb'+path,{request,signal});
+ const latest=await read('/deployments?env=production&per_page=1'),previous=latest?.[0];
+ if(previous?.id!==payload.previous_deployment_id||previous.project_name!=='citizenweb'||previous.environment!=='production'||previous.latest_stage?.status!=='success')fail('Pages上次生产部署已变化');
+ const project=await read('');
+ if(project?.name!=='citizenweb'||project.production_branch!=='main'||!project.domains?.includes('www.crcfrcn.com')
+  ||['github','gitlab'].includes(project.source?.type)&&project.source.config?.production_deployments_enabled!==false)fail('Pages生产项目身份或自动部署设置无效');
+ signal?.throwIfAborted();const started=now();
+ await invoke(node,[wrangler,'pages','deploy',join(work,'dist'),'--project-name','citizenweb','--branch','main','--commit-hash',payload.source_sha,'--commit-message',payload.release_tag],
+  work,{...environment,CLOUDFLARE_ACCOUNT_ID:account,CLOUDFLARE_API_TOKEN:token},signal,{protectedValues:[token]});
+ const result=(await read('/deployments?env=production&per_page=1'))?.[0];
+ if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(result?.id||'')||result.project_name!=='citizenweb'||result.environment!=='production'
+  ||result.latest_stage?.name!=='deploy'||result.latest_stage.status!=='success'||result.deployment_trigger?.metadata?.branch!=='main'
+  ||result.deployment_trigger.metadata.commit_hash!==payload.source_sha||!Number.isFinite(Date.parse(result.created_on))||Date.parse(result.created_on)<started-30000)fail('Pages部署后身份回读失败');
+ return {product_id:'citizenweb',platform:'web',project:'citizenweb',release_tag:payload.release_tag,source_sha:payload.source_sha,deployment_id:result.id,deployed:true};
+}
+
+export async function publishPages({proof,runID,nodePath=process.execPath,previousID,credentials,deploy=payload=>deployPages(payload,credentials,{signal}),signal,beforeDeploy,request=publicRequest,install=runTool}={}){
  if(proof?.product_id!=='citizenweb'||proof.delivery_channel!=='web'||!positive(proof.run_id)
-  ||typeof runID!=='string'||!/^[1-9][0-9]{8}$/u.test(runID)||typeof security!=='function'
+  ||typeof runID!=='string'||!/^[1-9][0-9]{8}$/u.test(runID)||typeof deploy!=='function'
   ||typeof nodePath!=='string'||!nodePath.startsWith('/')||typeof previousID!=='string'
   ||!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu.test(previousID))fail('Pages发布任务身份无效');
  const current=await selectedPublication(request,true);
@@ -150,10 +245,7 @@ export async function publishPages({proof,runID,nodePath,previousID,security,sig
    release_tag:proof.tag,source_sha:proof.source_sha,version:proof.version,
    archive_sha256:proof.assets.find(asset=>asset.name===names[0])?.sha256,
    previous_deployment_id:previousID,work,node_path:nodePath};
-  const answer=await security('cloudflare.pages.execute',{file:'citizenweb.mjs',
-   payload_base64:Buffer.from(JSON.stringify(payload)).toString('base64')});
-  if(answer?.ok!==true||typeof answer.payload_base64!=='string')fail('Pages发布安全执行器未确认');
-  const result=JSON.parse(Buffer.from(answer.payload_base64,'base64').toString('utf8'));
+  const result=await deploy(payload);
   if(result?.product_id!=='citizenweb'||result?.platform!=='web'||result?.release_tag!==proof.tag
    ||result?.source_sha!==proof.source_sha||result?.project!=='citizenweb'||result?.deployed!==true)fail('Pages部署回执无效');
   return result;
@@ -173,7 +265,18 @@ async function publicRequest(path,{raw=false}={}){
 }
 
 const direct=process.argv[1]===import.meta.filename,testing=direct&&Boolean(process.env.NODE_TEST_CONTEXT)&&process.argv.length===2;
-if(direct&&!testing){if(process.argv.length!==3||process.argv[2]!=='prepare')fail('发布只读入口参数无效');void preparePublication().then(value=>process.stdout.write(JSON.stringify(value)+'\n')).catch(error=>{console.error(error.message);process.exitCode=1;});}
+if(direct&&!testing){
+ const controller=new AbortController();for(const name of ['SIGTERM','SIGINT'])process.once(name,()=>controller.abort(Error('发布已取消')));
+ void (async()=>{
+  if(process.argv.length!==3||!['prepare','publish','deploy'].includes(process.argv[2]))fail('发布入口参数无效');
+  if(process.argv[2]==='prepare')return preparePublication();
+  let text='';for await(const chunk of process.stdin){text+=chunk;if(Buffer.byteLength(text)>1024**2)fail('发布输入超限');}
+  let value;try{value=JSON.parse(text);}catch{fail('发布输入JSON无效');}
+  if(!value||typeof value!=='object'||Array.isArray(value))fail('发布输入无效');
+  if(process.argv[2]==='deploy')return deployPages(value.payload,value.credentials,{signal:controller.signal});
+  return publishPages({...value,signal:controller.signal});
+ })().then(value=>process.stdout.write(JSON.stringify(value)+'\n')).catch(error=>{console.error(error.message);process.exitCode=1;});
+}
 
 if(testing){
  const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict'),{gzipSync}=await import('node:zlib'),{Readable}=await import('node:stream');
@@ -210,20 +313,18 @@ if(testing){
   await assert.rejects(preparePublication({request:broken.request}),/回读/u);
   await assert.rejects(preparePublication({request:async path=>path.startsWith('actions/')?{workflow_runs:[{path:workflow,repository:{full_name:repository},head_branch:'main',event:'workflow_dispatch',status:'completed',conclusion:'success'},{path:workflow,repository:{full_name:repository},head_branch:'main',event:'workflow_dispatch',status:'completed',conclusion:'success'}]}:[]}),/唯一/u);
  });
- test('只公开只读准备入口，错误参数不能产生正式动作',()=>{
+ test('公开候选字段闭集拒绝越界输入',()=>{
   assert.equal(names.length,3);assert.equal(exact({product_id:'citizenweb',delivery_channel:'web'},['product_id','delivery_channel']),true);
   assert.equal(exact({product_id:'citizenweb',unknown:true},['product_id']),false);
  });
  test('Pages发布只消费同一正式候选且失败不触发安全部署',async()=>{
   const source=fixture(),proof=await preparePublication({request:source.request});let installs=0,calls=0;
-  const security=async(operation,payload)=>{calls++;assert.equal(operation,'cloudflare.pages.execute');
-   const request=JSON.parse(Buffer.from(payload.payload_base64,'base64'));
+  const deploy=async request=>{calls++;
    assert.equal(request.release_tag,proof.tag);assert.equal(request.archive_sha256,proof.assets[0].sha256);
    assert.equal(request.previous_deployment_id,'00000000-0000-4000-8000-000000000001');
-   return {ok:true,payload_base64:Buffer.from(JSON.stringify({product_id:'citizenweb',platform:'web',
-    release_tag:proof.tag,source_sha:proof.source_sha,project:'citizenweb',deployed:true})).toString('base64')};};
+   return {product_id:'citizenweb',platform:'web',release_tag:proof.tag,source_sha:proof.source_sha,project:'citizenweb',deployed:true};};
   const options={proof,runID:'123456789',nodePath:process.execPath,
-   previousID:'00000000-0000-4000-8000-000000000001',request:source.request,security,
+   previousID:'00000000-0000-4000-8000-000000000001',request:source.request,deploy,
    install:async(_node,_args,work)=>{installs++;assert.ok(work.includes('/target/publish/web/'));}};
   const result=await publishPages(options);assert.equal(result.deployed,true);assert.equal(installs,1);assert.equal(calls,1);
   await assert.rejects(publishPages({...options,proof:{...proof,source_sha:'b'.repeat(40)}}),/授权后发生变化/u);
@@ -242,4 +343,43 @@ if(testing){
    ['citizenweb-approval','COLD_SIGNER_PUBLIC_KEY','protected','authorization']]);
   assert.equal(rows.some(row=>Object.hasOwn(row,'value')),false);
  });
+ // 本产品上传回归使用已存在的合成正式包；所有云读取与工具调用均由本用例模拟。
+ async function pagesExecutionFixture(t){
+  const base=fileURLToPath(new URL('../target/publish/web/',import.meta.url));await mkdir(base,{recursive:true});
+  const work=await realpath(await mkdtemp(join(base,'123456789-')));t.after(()=>rm(work,{recursive:true,force:true}));
+  const source=fixture(),proof=await preparePublication({request:source.request});
+  for(const [name,bytes]of archiveFiles(source.body.get(names[0]))){await mkdir(dirname(join(work,name)),{recursive:true});await writeFile(join(work,name),bytes);}
+  await mkdir(join(work,'node_modules/wrangler/bin'),{recursive:true});await writeFile(join(work,'node_modules/wrangler/bin/wrangler.js'),'synthetic');
+  const previous='00000000-0000-4000-8000-000000000001',latest='00000000-0000-4000-8000-000000000002';
+  const payload={schema:1,product_id:'citizenweb',platform:'web',run_id:'123456789',release_tag:proof.tag,source_sha:proof.source_sha,version:proof.version,
+   archive_sha256:proof.assets[0].sha256,previous_deployment_id:previous,work,node_path:await realpath(process.execPath)};
+  const credentials={account:'1'.repeat(32),token:'synthetic-pages-credential'},calls=[];let reads=0,mode='success';
+  const invoke=async(_node,args,_work,environment,_signal,options={})=>{
+   calls.push(args);if(args[0]==='--version')return 'v25.2.1';if(args[1]==='--version')return '4.121.0';
+   assert.equal(environment.CLOUDFLARE_API_TOKEN,credentials.token);assert.equal(args.includes(credentials.token),false);assert.deepEqual(options.protectedValues,[credentials.token]);
+   if(mode==='tool-failure')throw Error('synthetic upload failure');return '';
+  };
+  const request=async url=>{
+   assert.ok(url.startsWith('https://api.cloudflare.com/client/v4/accounts/'+credentials.account+'/pages/projects/citizenweb'));
+   if(!url.includes('/deployments?'))return Response.json({success:true,result:{name:'citizenweb',production_branch:'main',domains:['www.crcfrcn.com']}});
+   reads++;return Response.json({success:true,result:[{id:reads===1?(mode==='changed' ? latest : previous):latest,project_name:'citizenweb',environment:'production',
+    latest_stage:{name:'deploy',status:'success'},created_on:new Date().toISOString(),deployment_trigger:{metadata:{branch:'main',commit_hash:mode==='wrong-source'?'b'.repeat(40):proof.source_sha}}}]});
+  };
+  return {payload,credentials,calls,invoke,request,setMode:value=>{mode=value;reads=0;calls.length=0;}};
+ }
+ test('Pages上传及回读使用本产品入口，凭据不进入命令行',async t=>{
+  const f=await pagesExecutionFixture(t),result=await deployPages(f.payload,f.credentials,f);
+  assert.equal(result.deployed,true);assert.equal(f.calls.filter(args=>args[1]==='pages').length,1);
+  const command=f.calls.find(args=>args[1]==='pages');assert.deepEqual(command.slice(1,4),['pages','deploy',join(f.payload.work,'dist')]);
+ });
+ test('Pages前态变化、工具失败、错误回读和取消均不返回成功',async t=>{
+  const f=await pagesExecutionFixture(t);f.setMode('changed');await assert.rejects(deployPages(f.payload,f.credentials,f),/上次生产部署已变化/u);
+  assert.equal(f.calls.some(args=>args[1]==='pages'),false);
+  f.setMode('tool-failure');await assert.rejects(deployPages(f.payload,f.credentials,f),/synthetic upload failure/u);assert.equal(f.calls.filter(args=>args[1]==='pages').length,1);
+  f.setMode('wrong-source');await assert.rejects(deployPages(f.payload,f.credentials,f),/回读失败/u);
+  f.setMode('success');const abort=new AbortController();abort.abort(Error('synthetic cancellation'));
+  await assert.rejects(deployPages(f.payload,f.credentials,{...f,signal:abort.signal}),/synthetic cancellation/u);assert.equal(f.calls.length,0);
+  await writeFile(join(f.payload.work,'dist/index.html'),'changed');await assert.rejects(deployPages(f.payload,f.credentials,f),/清单不一致/u);assert.equal(f.calls.length,0);
+ });
+
 }
