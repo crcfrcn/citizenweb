@@ -340,6 +340,9 @@ export async function build(platform,work,receipt,base) {
 // 每次调用拥有自己的取消和进程集合，导入API并发也不能共享执行状态。
 const executions=new AsyncLocalStorage();
 export async function runBuildProcess(file,args,env,cwd=root,{capture=false,input,accepted=[0],timeout=7200000,signal=executions.getStore()?.signal,passHost=false,streamError=false}={}) {
+ // 只传递本产品当前GitHub任务的公开身份，不隐式交付令牌或控制台状态。
+ if(!process.env.NODE_TEST_CONTEXT&&process.env.GITHUB_ACTIONS==='true'&&process.env.GITHUB_REPOSITORY==='crcfrcn/citizenweb')env={...env,...Object.fromEntries(['GITHUB_ACTIONS','GITHUB_REPOSITORY','GITHUB_REF','GITHUB_EVENT_NAME','GITHUB_WORKFLOW_REF','GITHUB_WORKFLOW','GITHUB_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_RUN_NUMBER'].filter(key=>typeof process.env[key]==='string').map(key=>[key,process.env[key]]))};
+
  signal?.throwIfAborted();
  return new Promise((ok,reject)=>{
   const child=spawn(file,args,{cwd,env:workEnvironment(env),detached:true,stdio:['pipe','pipe','pipe',...(passHost?[3]:[])]});
@@ -422,6 +425,7 @@ if(testSession&&process.argv.length===2&&resolve(process.argv[1]||'')===fileURLT
 
 
 export async function execute(platform,work,request={},options={}) {
+ if(!process.env.NODE_TEST_CONTEXT)requireAutomationBuild(options.environment||process.env);
  if(options.stages&&!process.env.NODE_TEST_CONTEXT)fail('合成阶段仅用于本仓测试');
  const environment=options.environment||process.env;
  if(options.consume){
@@ -502,6 +506,9 @@ export function cleanShellPaths(args,environment=process.env){
 
 
 async function runCLI(){
+ if(['wallet','native','run','local','frontend','prepack','native-build','dev'].includes(process.argv[2])&&!process.env.NODE_TEST_CONTEXT)requireAutomationBuild();
+ if(process.argv[2]==='ci-build'&&process.argv.length===4){await ciBuild(process.argv[3]);return;}
+ if(['execute','resources','prepare','build'].includes(process.argv[2])&&!process.env.NODE_TEST_CONTEXT)requireAutomationBuild();
  const [operation,platform,flag,work]=process.argv.slice(2);
  if(operation==='execute'){if(flag!=='--work'||work!==fixedWork('build/'+platform))fail('平台编译现场不符');return withFixedWork('build/'+platform,()=>runCommand(),{environment:process.env});}
  if(operation==='execute')return runCommand();
@@ -702,9 +709,9 @@ async function resourceWork(work) {
 }
 async function acquireArchive(entry,{store,work,offline=false,fetcher=fetch,signal,maxBytes=4*1024**3}={}){
 
- const url=checkedURL(entry.url);digestSpec(entry);await directory(store,true);const coordinate=hash(JSON.stringify([url,entry.sha256||entry.integrity]));const target=join(store,coordinate+'.blob');
+ const url=checkedURL(entry.url);digestSpec(entry);await directory(store,true);const coordinate=hash(JSON.stringify([url,entry.sha256||entry.integrity]));let target=join(store,coordinate+'.blob');
  const check=async path=>{await regular(path);const b=await readFile(path);if(!b.length||b.length>maxBytes)fail('原件大小超限');verifyBytes(b,entry);return path;};
- if(await stat(target))return check(target);
+ if(await stat(target))try{return await check(target);}catch(error){if(offline)throw error;process.stderr.write('原件缓存不可用，按原锁重新下载\n');target=join(await resourceWork(work),coordinate+'.'+randomUUID()+'.blob');}
 
  if(offline)fail('离线缺少锁定资源：'+url);signal?.throwIfAborted();let response,current=url;
  for(let i=0;i<=5;i++){response=await fetcher(current,{redirect:'manual',signal});if([301,302,303,307,308].includes(response.status)){await response.body?.cancel();if(i===5)fail('来源重定向超限');current=checkedURL(new URL(response.headers.get('location'),current).href);continue;}break;}
@@ -1457,7 +1464,7 @@ function automationRun(run,workflow,id){
 
 function automationSafe(value,token){return String(value??'').split(token||'\0').join('[已脱敏]').replace(/gh[sopur]_[A-Za-z0-9_]+/gu,'[已脱敏]').slice(0,4000);}
 async function automationRequest(path,token,{method='GET',body,fetchImpl=fetch,signal}={}){
- if(typeof path!=='string'||path.startsWith('/')||path.includes('..')||/[\r\n]/u.test(path))throw Error('产品 GitHub 路径无效');
+ if(typeof path!=='string'||path.startsWith('/')||path.includes('..')||/[\r\n]/u.test(path) && !/^(?:releases\?per_page=100&page=[1-9]\d*|actions\/workflows\/[a-z]+\.yml\/runs\?per_page=100&page=[1-9]\d*)$/u.test(path))throw Error('产品 GitHub 路径无效');
  let response;
  try{response=await fetchImpl(`https://api.github.com/repos/${automationRepository}/${path}`,{method,redirect:'error',credentials:'omit',
   headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json',
@@ -1475,7 +1482,8 @@ async function automationRequest(path,token,{method='GET',body,fetchImpl=fetch,s
 export async function dispatchProductAutomation(platform,token,{inputs={},fetchImpl=fetch,accepted}={}){
  const workflow=automationWorkflows[platform];
  if(!workflow||typeof token!=='string'||!token||!inputs||typeof inputs!=='object'||Array.isArray(inputs))throw Error('产品自动化派发输入无效');
- const value=await automationRequest(`actions/workflows/${workflow}/dispatches`,token,{method:'POST',body:{ref:'main',inputs},fetchImpl});
+ const plan=await automationVersionPlan(platform,token,{fetchImpl});if(Object.keys(inputs).some(key=>key!=='version')||inputs.version!==undefined&&inputs.version!==plan.version)throw Error('候选版本变化');
+ const value=await automationRequest(`actions/workflows/${workflow}/dispatches`,token,{method:'POST',body:{ref:'main',inputs:{version:plan.version}},fetchImpl});
  if(!Number.isSafeInteger(value?.workflow_run_id)||value.workflow_run_id<1
   ||value.html_url!==`https://github.com/${automationRepository}/actions/runs/${value.workflow_run_id}`)
   throw Error('产品派发缺少准确 Run 回执；未再次派发');
@@ -1499,6 +1507,8 @@ if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2){
 
 
  test('派发只接收准确 Run 回执，读回失败不补发',async()=>{
+  const withHistory=handler=>async(url,options={})=>{const value=new URL(url);if(value.pathname.endsWith('/releases'))return Response.json([]);if(value.pathname.includes('/workflows/')&&value.pathname.endsWith('/runs'))return Response.json({workflow_runs:[]});return handler(url,options);};
+
   const platform=Object.keys(automationWorkflows)[0],workflow=automationWorkflows[platform],id=123;
   const run={id,path:`.github/workflows/${workflow}`,event:'workflow_dispatch',head_branch:'main',head_sha:'a'.repeat(40),
    repository:{full_name:automationRepository},html_url:`https://github.com/${automationRepository}/actions/runs/${id}`};
@@ -1507,15 +1517,15 @@ if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2){
    if(options.method==='POST'){posts++;return Response.json({workflow_run_id:id,html_url:run.html_url});}
    return Response.json(run);
   };
-  assert.equal((await dispatchProductAutomation(platform,'fixture-token',{fetchImpl,accepted:()=>received++})).id,id);
+  assert.equal((await dispatchProductAutomation(platform,'fixture-token',{fetchImpl:withHistory(fetchImpl),accepted:()=>received++})).id,id);
   assert.equal(posts,1);assert.equal(received,1);
   assert.throws(()=>automationRun({...run,repository:{full_name:'other/repo'}},workflow,id),/身份/);
-  await assert.rejects(dispatchProductAutomation(platform,'fixture-token',{fetchImpl:async()=>Response.json({})}),/回执/);
+  await assert.rejects(dispatchProductAutomation(platform,'fixture-token',{fetchImpl:withHistory(async()=>Response.json({}))}),/回执/);
   assert.equal(posts,1);
   const ambiguous=async(_url,options)=>options.method==='POST'
    ?Response.json({workflow_run_id:id,html_url:run.html_url}):Promise.reject(Error('读回中断'));
   let accepted=0;
-  await assert.rejects(dispatchProductAutomation(platform,'fixture-token',{fetchImpl:ambiguous,accepted:()=>accepted++}),/未确认/);
+  await assert.rejects(dispatchProductAutomation(platform,'fixture-token',{fetchImpl:withHistory(ambiguous),accepted:()=>accepted++}),/未确认/);
   assert.equal(accepted,1); // 接收后读回失败仍只派发一次，原 Run 坐标已交付调用方。
  });
 
@@ -1529,6 +1539,8 @@ export const automationClient=Object.freeze({automationRepository,automationWork
 if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===import.meta.filename){
  const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict');
  test('独立自动化接口不接收任务宿主，准确派发与错误回执只请求一次',async()=>{
+  const withHistory=handler=>async(url,options={})=>{const value=new URL(url);if(value.pathname.endsWith('/releases'))return Response.json([]);if(value.pathname.includes('/workflows/')&&value.pathname.endsWith('/runs'))return Response.json({workflow_runs:[]});return handler(url,options);};
+
   const api=automationClient,workflows=api.automationWorkflows||api.automationWorkflow;
   const platform=Object.keys(workflows)[0],workflow=workflows[platform],repository=api.automationRepository;
   const dispatch=api.dispatchAutomation||api.dispatchProductAutomation||api.dispatch;
@@ -1544,8 +1556,364 @@ if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===imp
    assert.ok(new URL(url).pathname.endsWith('/runs/731'));
    return Response.json(mode==='wrong'?{...run,head_sha:'invalid'}:run);
   };
-  const invoke=()=>api.automationTransport?api.automationTransport.run({fetchImpl},()=>dispatch(platform,'fixture',{fetchImpl})):dispatch(platform,'fixture',{fetchImpl});
+  const invoke=()=>api.automationTransport?api.automationTransport.run({fetchImpl:withHistory(fetchImpl)},()=>dispatch(platform,'fixture',{fetchImpl:withHistory(fetchImpl)})):dispatch(platform,'fixture',{fetchImpl:withHistory(fetchImpl)});
   assert.equal((await invoke()).id,731);assert.equal(dispatches,1);
   for(const failure of ['ambiguous','wrong']){mode=failure;dispatches=0;await assert.rejects(invoke);assert.equal(dispatches,1);}
  });
+}
+
+
+// 自动化生命周期归所属产品；宿主仅提供授权、任务记录和日志回调。
+let productAutomationInstance;
+export async function automationController(){
+ if(productAutomationInstance)return productAutomationInstance;
+ const product={contract,automationClient};
+
+ const {automationRepository,automationWorkflows,automationRoute,automationRun,automationSafe,automationRequest,dispatchProductAutomation}=product.automationClient;
+const automationObservers=new WeakMap();
+const automationReconnect=new WeakSet();
+async function automationToken(route,actionId,authorize,task){
+ if(typeof authorize!=='function')throw Error('缺少当前产品授权回调');
+ const access=await authorize({repository:automationRepository,actionId,platform:route.platform,task});
+ if(typeof access?.token!=='string'||!access.token||/[\s\x00-\x1f\x7f]/u.test(access.token)||!Number.isFinite(access.expiresAt)||access.expiresAt<=Date.now()/1000)throw Error('当前产品短期授权无效');return access;
+}
+async function automationLogs(run,token,host,task){
+ const first=await fetch(`https://api.github.com/repos/${automationRepository}/actions/runs/${run.id}/logs`,{
+  redirect:'manual',credentials:'omit',headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json',
+   'X-GitHub-Api-Version':'2026-03-10','User-Agent':contract.product_id},signal:AbortSignal.timeout(30000)});
+ if(first.status===404)return;
+ let response=first;
+ if(first.status===302){const url=new URL(first.headers.get('location'));
+  if(url.protocol!=='https:'||url.username||url.password)throw Error('产品 GitHub 日志下载地址无效');
+  response=await fetch(url,{redirect:'error',credentials:'omit',signal:AbortSignal.timeout(60000)});
+ }
+ if(!response.ok||!response.body)throw Error('产品 GitHub 日志读取失败');
+ let size=0;const chunks=[];for await(const chunk of response.body){size+=chunk.length;if(size>32*1024*1024)throw Error('产品 GitHub 日志归档超限');chunks.push(chunk);}
+ const bytes=Buffer.concat(chunks),{inflateRawSync}=await import('node:zlib');
+ let end=-1;for(let at=bytes.length-22;at>=Math.max(0,bytes.length-65558);at--)if(bytes.readUInt32LE(at)===0x06054b50){end=at;break;}
+ if(end<0)throw Error('产品 GitHub 日志 ZIP 目录无效');
+ const count=bytes.readUInt16LE(end+10);if(count>2000)throw Error('产品 GitHub 日志文件过多');
+ let at=bytes.readUInt32LE(end+16),total=0;
+ for(let i=0;i<count;i++){
+  if(at+46>bytes.length||bytes.readUInt32LE(at)!==0x02014b50)throw Error('产品 GitHub 日志成员无效');
+  const flags=bytes.readUInt16LE(at+8),method=bytes.readUInt16LE(at+10),packed=bytes.readUInt32LE(at+20),length=bytes.readUInt32LE(at+24);
+  const nameSize=bytes.readUInt16LE(at+28),extra=bytes.readUInt16LE(at+30),comment=bytes.readUInt16LE(at+32),local=bytes.readUInt32LE(at+42);
+  const name=bytes.subarray(at+46,at+46+nameSize).toString('utf8');at+=46+nameSize+extra+comment;
+  total+=length;if(flags&1||![0,8].includes(method)||length>32*1024*1024||total>128*1024*1024
+   ||local+30>bytes.length||bytes.readUInt32LE(local)!==0x04034b50)throw Error('产品 GitHub 日志结构无效');
+  const start=local+30+bytes.readUInt16LE(local+26)+bytes.readUInt16LE(local+28);
+  if(start+packed>bytes.length)throw Error('产品 GitHub 日志内容越界');
+  const data=method===0?bytes.subarray(start,start+packed):inflateRawSync(bytes.subarray(start,start+packed),{maxOutputLength:length});
+  if(data.length!==length)throw Error('产品 GitHub 日志大小不一致');
+  if(name.endsWith('.txt')){host.report(task,`GitHub日志：${automationSafe(name,token)}`);
+   for(const line of data.toString('utf8').split(/\r?\n/u))if(line)host.report(task,automationSafe(line,token));}
+ }
+}
+function automationIdentity(task,route,workflow,run){
+ Object.assign(task,{repository:route.repository,productId:route.product,platform:route.platform,flow:'release',mode:'release',
+  githubRepository:automationRepository,githubWorkflow:workflow,githubRunId:run.id,githubRunNumber:run.run_number,
+  githubRunAttempt:run.run_attempt,githubRunUrl:run.html_url,sourceSHA:run.head_sha,githubRemoteStatus:run.status,recovered:false});
+}
+function automationRecoveryCall(task,route,host){
+ return typeof host.recoverTask==='function'?host.recoverTask(task):recoverAutomation(task,route,host);
+}
+function automationRetry(task,route,host){
+ if(!task.active||automationReconnect.has(task))return;
+ automationReconnect.add(task);
+ // 调度任务经宿主重新建立授权上下文；独立调用才直接走本产品恢复入口。
+ const timer=setTimeout(()=>{
+  automationReconnect.delete(task);
+  if(!task.active||!task.recovered)return;
+  void Promise.resolve().then(()=>automationRecoveryCall(task,route,host)).catch(error=>{
+    if(!task.active)return;
+    task.recovered=true;host.report(task,'原 Run 重连未完成：'+automationSafe(error.message));host.changed(task);
+    automationRetry(task,route,host);
+  });
+ },120000);
+ timer.unref?.();
+}
+async function observeProductAutomation(task,route,host,access){
+ const workflow=automationRoute(route),jobs=new Map();automationObservers.set(task,access);
+ try{while(task.active){
+  const run=automationRun(await automationRequest(`actions/runs/${task.githubRunId}`,access.token),workflow,task.githubRunId);
+  if(task.sourceSHA&&run.head_sha!==task.sourceSHA)throw Error('产品 Run 提交身份已变化');
+  automationIdentity(task,route,workflow,run);host.changed(task);
+  const state=run.status==='completed'?(run.conclusion==='success'?'成功':'失败'):run.status;
+  if(task.automationLastState!==state){host.report(task,'GitHub：'+state);task.automationLastState=state;host.changed(task);}
+  const result=await automationRequest(`actions/runs/${run.id}/jobs?per_page=100`,access.token);
+  if(!Array.isArray(result?.jobs))throw Error('产品 GitHub Job 列表无效');
+  for(const job of result.jobs){const key=job.status+':'+job.conclusion;
+   if(jobs.get(job.id)!==key){jobs.set(job.id,key);host.report(task,`${automationSafe(job.name,access.token)}：${automationSafe(job.conclusion||job.status,access.token)}`);}}
+  if(run.status==='completed'){
+   await settleAutomationHistory(route.platform,run.id,access.token);
+   try{await automationLogs(run,access.token,host,task);}catch{host.report(task,'GitHub 终态已确认；本次日志下载未完成，请查看 Run 链接');}
+   await host.finish(task,task.cancelRequested?1:run.conclusion==='success'?0:1,
+    task.cancelRequested?`任务已取消；塔塔自动化终态：${run.conclusion}`:run.conclusion==='success'?'塔塔自动化成功':`塔塔自动化失败：${run.conclusion}`);
+   await host.refresh?.(route.repository);return;
+  }
+  await new Promise(resolve=>setTimeout(resolve,5000));
+ }}catch(error){if(task.active){task.recovered=true;host.report(task,automationSafe(error.message,access.token)+'；将重新连接原 Run');host.changed(task);automationRetry(task,route,host);}}
+ finally{automationObservers.delete(task);}
+}
+function cancelProductAutomation(task,route,host){
+ if(task.remoteCancelOperation)return task.remoteCancelOperation;
+ const operation=cancelProductAutomationOnce(task,route,host).catch(error=>{
+  if(task.active){task.recovered=true;host.report(task,automationSafe(error.message)+'；将重新连接原 Run');host.changed(task);automationRetry(task,route,host);}
+  throw error;
+ });
+ task.remoteCancelOperation=operation;
+ void operation.finally(()=>{if(task.remoteCancelOperation===operation)delete task.remoteCancelOperation;}).catch(()=>{});
+ return operation;
+}
+async function cancelProductAutomationOnce(task,route,host){
+ const workflow=automationRoute(route);
+ if(!task.active||task.repository!==route.repository||task.platform!==route.platform||task.githubRepository!==automationRepository
+  ||task.githubWorkflow!==workflow||task.canonicalId!==route.canonicalId)throw Error('产品自动化取消身份无效');
+ task.cancelRequested=true;host.changed(task);
+ if(!task.githubRunId)return {id:task.id,closed:true};
+ const remembered=automationObservers.get(task);
+ const access=remembered?.expiresAt>Date.now()/1000?remembered:await automationToken(route,task.actionId,host.authorize,task);
+ let run=automationRun(await automationRequest(`actions/runs/${task.githubRunId}`,access.token),workflow,task.githubRunId);
+ if(task.sourceSHA&&run.head_sha!==task.sourceSHA)throw Error('产品自动化取消提交身份已变化');
+ const already=run.status==='completed';
+ if(!already){try{await automationRequest(`actions/runs/${run.id}/cancel`,access.token,{method:'POST'});}catch(error){
+  run=automationRun(await automationRequest(`actions/runs/${task.githubRunId}`,access.token),workflow,task.githubRunId);
+  if(run.status!=='completed')throw error;}}
+ for(let i=0;i<60&&run.status!=='completed';i++){await new Promise(resolve=>setTimeout(resolve,5000));run=automationRun(await automationRequest(`actions/runs/${task.githubRunId}`,access.token),workflow,task.githubRunId);}
+ if(run.status!=='completed'){
+  host.report(task,'普通取消未收口，执行原 Run 强制取消');
+  await automationRequest(`actions/runs/${task.githubRunId}/force-cancel`,access.token,{method:'POST'});
+  for(let i=0;i<60&&run.status!=='completed';i++){await new Promise(resolve=>setTimeout(resolve,5000));run=automationRun(await automationRequest(`actions/runs/${task.githubRunId}`,access.token),workflow,task.githubRunId);}
+ }
+ if(run.status!=='completed')throw Error('产品 GitHub 取消尚无远端终态，任务保持活动');
+ await settleAutomationHistory(route.platform,run.id,access.token);
+ if(task.active){task.githubRemoteStatus=run.status;await host.finish(task,1,(already?'取消时塔塔自动化已结束：':'任务已取消；塔塔自动化终态：')+run.conclusion);}
+ return {id:task.id,closed:true};
+}
+async function startAutomation(route,action,host){
+ const workflow=automationRoute(route,action);
+ const existing=host.listTasks().find(task=>task.active&&task.recovered&&task.githubRunId&&task.repository===route.repository&&task.platform===route.platform);
+ if(existing)return recoverAutomation(existing,route,host);
+ const access=await automationToken(route,action.id,host.authorize);
+ const task=host.createTask({moduleFile:action.file,canonicalId:route.canonicalId,actionId:action.id,title:action.taskName,moduleId:action.productId});
+ Object.assign(task,{repository:route.repository,productId:route.product,platform:route.platform,mode:'release',flow:'release'});
+ task.cancel=()=>cancelProductAutomation(task,route,host);task.secrets.push(access.token);host.created(task);host.report(task,'调用所属仓 '+workflow);
+ try{
+  const run=await dispatchProductAutomation(route.platform,access.token,{accepted:value=>{
+   Object.assign(task,{githubRunId:value.workflow_run_id,githubRunUrl:value.html_url,githubRepository:automationRepository,githubWorkflow:workflow});host.changed(task);
+  }});
+  automationIdentity(task,route,workflow,run);host.changed(task);host.report(task,'GitHub 已接收：'+run.html_url);
+  if(task.cancelRequested)void cancelProductAutomation(task,route,host);
+  else void observeProductAutomation(task,route,host,access);
+ }catch(error){
+  if(task.githubRunId){task.recovered=true;host.report(task,'原 Run 已接收，后续读取中断；将重新连接');host.changed(task);automationRetry(task,route,host);}
+  else await host.finish(task,1,automationSafe(error.message,access.token));
+ }
+ return {id:task.id};
+}
+async function recoverAutomation(task,route,host){
+ const workflow=automationRoute(route);
+ if(!task?.active||task.mode!=='release'||task.repository!==route.repository||task.platform!==route.platform
+  ||task.canonicalId!==route.canonicalId||task.githubRepository!==automationRepository||task.githubWorkflow!==workflow
+  ||!Number.isSafeInteger(task.githubRunId)||task.githubRunId<1||!/^[0-9a-f]{40}$/u.test(task.sourceSHA||''))
+  throw Error('产品自动化恢复身份无效');
+ task.cancel=()=>cancelProductAutomation(task,route,host);task.recovered=true;host.changed(task);
+ try{const access=await automationToken(route,task.actionId,host.authorize,task);
+  task.secrets.push(access.token);task.recovered=false;host.changed(task);
+  if(task.cancelRequested)void cancelProductAutomation(task,route,host);
+  else void observeProductAutomation(task,route,host,access);
+ }catch(error){task.recovered=true;host.report(task,'原 Run 自动恢复未完成：'+automationSafe(error.message));host.changed(task);automationRetry(task,route,host);}
+ return {id:task.id};
+}
+ return productAutomationInstance={...product,startAutomation,recoverAutomation};
+}
+
+// 完整构建只接受本产品自己的 GitHub 任务；产品之间不互相调度或等待。
+export function requireAutomationBuild(environment=process.env){
+ const repository='crcfrcn/citizenweb';
+ if(environment.GITHUB_ACTIONS!=='true'||environment.GITHUB_REPOSITORY!==repository||environment.GITHUB_REF!=='refs/heads/main'||environment.GITHUB_EVENT_NAME!=='workflow_dispatch'
+  ||!Object.values(automationWorkflows).some(file=>environment.GITHUB_WORKFLOW_REF===repository+'/.github/workflows/'+file+'@refs/heads/main')
+  ||!/^[a-f0-9]{40}$/.test(environment.GITHUB_SHA||'')||!/^[1-9]\d*$/.test(environment.GITHUB_RUN_ID||'')||!/^[1-9]\d*$/.test(environment.GITHUB_RUN_ATTEMPT||''))throw Error('本产品完整构建仅由塔塔自动化执行');
+}
+
+
+// 工作流只调度本入口；构建、版本及正式产物实现归本产品。
+export async function ciBuild(requestedPlatform,environment=process.env){
+ if(requestedPlatform!=="web")throw Error('构建平台无效');
+ requireAutomationBuild(environment);
+const {createHash}=await import("node:crypto");
+const {execFileSync}=await import("node:child_process");
+const {lstatSync,mkdirSync,readFileSync,readdirSync,writeFileSync}=await import("node:fs");
+const {basename,join,relative,sep}=await import("node:path");
+const {gzipSync}=await import("node:zlib");
+
+const {inspectPackage}=await import("./publish.mjs");
+
+const repo='crcfrcn/citizenweb',product='citizenweb',platform='web';
+const fail=message=>{throw Error('公民官网正式版：'+message);};
+const hash=value=>createHash('sha256').update(value).digest('hex');
+const stable=value=>Array.isArray(value)?'['+value.map(stable).join(',')+']':value&&typeof value==='object'?'{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+stable(value[key])).join(',')+'}':JSON.stringify(value);
+const gh=(args)=>execFileSync('gh',args,{encoding:'utf8',maxBuffer:8*1024**2,env:environment}).trim();
+const api=path=>JSON.parse(gh(['api','repos/'+repo+'/'+path]));
+const run=Number(environment.GITHUB_RUN_ID),attempt=Number(environment.GITHUB_RUN_ATTEMPT),number=Number(environment.GITHUB_RUN_NUMBER);
+if(environment.GITHUB_ACTIONS!=='true'||environment.GITHUB_REPOSITORY!==repo
+  ||environment.GITHUB_EVENT_NAME!=='workflow_dispatch'||environment.GITHUB_REF!=='refs/heads/main'
+  ||environment.GITHUB_WORKFLOW_REF!==repo+'/.github/workflows/web.yml@refs/heads/main'
+  ||![run,attempt,number].every(value=>Number.isSafeInteger(value)&&value>0)
+  ||!/^[a-f0-9]{40}$/u.test(environment.GITHUB_SHA||'')
+  ||checkoutSHA()!==environment.GITHUB_SHA)fail('GitHub源码与运行身份无效');
+const seed=JSON.parse(readFileSync('package.json','utf8')).version;
+const {version}=await automationVersionPlan('web',environment.GH_TOKEN||environment.GITHUB_TOKEN,{currentRunId:run}),sha=environment.GITHUB_SHA;
+if(version!==environment.PRODUCT_AUTOMATION_VERSION)throw Error('本次候选版本与派发输入不符');
+const work=join(process.cwd(),'target/build/web');
+const task=join(environment.RUNNER_TEMP,product,platform,String(run),String(attempt));
+mkdirSync(task,{recursive:true});
+const collect=(base,prefix)=>{const values=[];
+  function visit(directory){for(const name of readdirSync(directory).sort()){const path=join(directory,name),info=lstatSync(path);
+    if(info.isSymbolicLink())fail('候选含链接');if(info.isDirectory())visit(path);
+    else if(info.isFile()&&info.nlink===1&&info.size>0){const relativePath=relative(base,path).split(sep).join('/');
+      if(!relativePath||relativePath.split('/').some(part=>!part||part==='.'||part==='..'))fail('候选路径越界');
+      values.push([prefix+relativePath,readFileSync(path)]);}else fail('候选包含空文件或特殊文件');}}
+  visit(base);return values;};
+const archive=files=>{const blocks=[];for(const [name,data] of [...files].sort(([a],[b])=>a<b?-1:a>b?1:0)){
+  if(Buffer.byteLength(name)>100||data.length>128*1024**2)fail('正式成员路径或大小越界');
+  const header=Buffer.alloc(512),field=(at,size,value)=>header.write(value,at,size,'ascii');
+  field(0,100,name);field(100,8,'0000644\0');field(108,8,'0000000\0');field(116,8,'0000000\0');
+  field(124,12,data.length.toString(8).padStart(11,'0')+'\0');field(136,12,'00000000000\0');
+  header.fill(32,148,156);header[156]=48;field(257,6,'ustar\0');field(263,2,'00');
+  field(148,8,[...header].reduce((sum,byte)=>sum+byte,0).toString(8).padStart(6,'0')+'\0 ');
+  blocks.push(header,data,Buffer.alloc((512-data.length%512)%512));}blocks.push(Buffer.alloc(1024));
+  return gzipSync(Buffer.concat(blocks),{level:9,mtime:0});};
+await execute(platform,work,{}, {consume:async result=>{
+  if(result?.completion!=='compile-only'||result.product_id!==product||result.platform!==platform
+    ||result.work!==work||result.files?.length!==0)fail('产品Build回执无效');
+  const dist=join(work,'stage/compile'),assets=collect(dist,'dist/');
+  if(!assets.some(([name])=>name==='dist/index.html'))fail('官网入口缺失');
+  const assetRows=assets.map(([path,bytes])=>({path,sha256:hash(bytes)})).sort((a,b)=>a.path.localeCompare(b.path));
+  const assets_sha256=hash(Buffer.from(stable(assetRows)));
+  const pkg=JSON.parse(readFileSync('package.json','utf8')),lock=JSON.parse(readFileSync('package-lock.json','utf8'));
+  pkg.version=version;lock.version=version;if(!lock.packages?.[''])fail('npm锁根声明缺失');lock.packages[''].version=version;
+  const marker=Buffer.from(JSON.stringify({product_id:product,delivery_channel:'web',software_version:version,git_commit_sha:sha,assets_sha256})+'\n');
+  const payload=new Map([['package.json',Buffer.from(JSON.stringify(pkg)+'\n')],['package-lock.json',Buffer.from(JSON.stringify(lock)+'\n')],
+    ...assets,['dist/citizenweb-release.json',marker]]);
+  const files=[...payload].map(([path,bytes])=>({path,sha256:hash(bytes)})).sort((a,b)=>a.path.localeCompare(b.path));
+  const tools={node:process.version.slice(1),npm:execFileSync('npm',['--version'],{encoding:'utf8'}).trim(),vite:String(lock.packages['node_modules/vite']?.version||''),
+    wrangler:String(lock.packages['node_modules/wrangler']?.version||'')};
+  if(Object.values(tools).some(value=>!value))fail('正式工具版本缺失');
+  const manifest=Buffer.from(JSON.stringify({product_id:product,delivery_channel:'web',software_version:version,
+    git_commit_sha:sha,tools,assets_sha256,files},null,2)+'\n');
+  const checksums=Buffer.from([...files,{path:'release-manifest.json',sha256:hash(manifest)}]
+    .sort((a,b)=>a.path.localeCompare(b.path)).map(row=>row.sha256+'  '+row.path).join('\n')+'\n');
+  payload.set('release-manifest.json',manifest);payload.set('SHA256SUMS',checksums);
+  const bytes=archive(payload),assetName='citizenweb-release.tgz';
+  inspectPackage(bytes,manifest,checksums,version,sha);
+  const publish=new Map([[assetName,bytes],['release-manifest.json',manifest],['SHA256SUMS',checksums]]);
+  for(const [name,data] of publish)writeFileSync(join(task,name),data,{flag:'wx',mode:0o600});
+  const tag=automationDisplayName('web',version);
+  let tagCreated=false,created=false;
+  try{
+    const tagRef=JSON.parse(gh(['api','-X','POST','repos/'+repo+'/git/refs','-f','ref=refs/tags/'+tag,'-f','sha='+sha]));
+    tagCreated=true;
+    if(tagRef.ref!=='refs/tags/'+tag||tagRef.object?.sha!==sha||tagRef.object.type!=='commit')fail('正式Tag创建身份无效');
+    gh(['release','create',tag,...[...publish.keys()].map(name=>join(task,name)),'--repo',repo,'--target',sha,
+      '--title',tag,'--notes','<!-- automation:'+JSON.stringify({schema:1,product_id:product,platform,version,run_id:run,run_attempt:attempt,source_sha:sha})+' -->','--verify-tag','--draft','--latest=false']);
+    created=true;
+    const draft=JSON.parse(gh(['release','view',tag,'--repo',repo,'--json','databaseId,tagName,isDraft,targetCommitish']));
+    if(!Number.isSafeInteger(draft.databaseId)||draft.databaseId<1||draft.tagName!==tag||!draft.isDraft||draft.targetCommitish!==sha)fail('草稿Release查询身份无效');
+    const readback=api('releases/'+draft.databaseId);
+    if(readback.tag_name!==tag||!readback.draft||readback.target_commitish!==sha
+      ||readback.assets?.length!==publish.size)fail('草稿Release身份无效');
+    const ref=api('git/ref/tags/'+encodeURIComponent(tag));
+    if(ref.ref!=='refs/tags/'+tag||ref.object?.sha!==sha||ref.object.type!=='commit')fail('正式Tag提交无效');
+    const download=join(task,'readback');mkdirSync(download);
+    gh(['release','download',tag,'--repo',repo,'--dir',download]);
+    for(const [name,data] of publish){const asset=readback.assets.find(value=>value.name===name);
+      if(!asset||asset.state!=='uploaded'||asset.size!==data.length||asset.digest!=='sha256:'+hash(data)
+        ||hash(readFileSync(join(download,name)))!==hash(data))fail('正式资产回读不一致：'+name);}
+    gh(['release','edit',tag,'--repo',repo,'--draft=false']);
+    const final=api('releases/tags/'+encodeURIComponent(tag));
+    if(final.draft||final.prerelease||final.tag_name!==tag)fail('正式Release发布未确认');
+    console.log(JSON.stringify({tag,release_id:final.id,assets:[...publish.keys()]}));
+  }catch(error){
+    try{
+      if(created)gh(['release','delete',tag,'--repo',repo,'--yes']);
+      if(tagCreated)gh(['api','-X','DELETE','repos/'+repo+'/git/refs/tags/'+tag]);
+    }catch(cleanup){throw new Error(error.message+'；本次Release或Tag撤销未确认：'+cleanup.message);}
+    throw error;
+  }
+}});
+}
+
+
+// 版本只由本产品成功 Run 决定，不读取其它产品、平台或部署服务。
+export function automationDisplayName(platform,version){
+ if(platform!=="web"||!/^\d+\.\d+\.\d+$/.test(version))throw Error('产品平台版本无效');
+ return "公民官网·Web·v"+version;
+}
+export async function automationVersionPlan(platform,token,{currentRunId=null,fetchImpl=fetch}={}){
+ const workflow=automationWorkflows[platform];if(!workflow)throw Error('产品平台未接入');
+ const read=path=>automationRequest(path,token,{fetchImpl});
+ const runs=[];for(let page=1;page<=10000;page++){const value=await read('actions/workflows/'+workflow+'/runs?per_page=100&page='+page);if(!Array.isArray(value?.workflow_runs))throw Error('产品Run分页无效');runs.push(...value.workflow_runs);if(value.workflow_runs.length<100)break;if(page===10000)throw Error('产品Run分页超限');}
+ const owned=runs.filter(run=>run.path==='.github/workflows/'+workflow&&run.head_branch==='main'&&run.event==='workflow_dispatch');
+ if(owned.some(run=>run.id!==currentRunId&&run.status!=='completed'))throw Error('本平台已有活动自动化');
+ const successful=owned.filter(run=>run.status==='completed'&&run.conclusion==='success');
+ let baseline=null;
+ for(let page=1;page<=10000;page++){
+  const releases=await read('releases?per_page=100&page='+page);if(!Array.isArray(releases))throw Error('产品Release分页无效');
+  for(const release of releases){
+   if(release.draft||release.prerelease||!release.published_at)continue;
+   const canonical=new RegExp('^'+"公民官网·Web·v"+'(\\d+\\.\\d+\\.\\d+)$').exec(release.tag_name||'');
+   const historical=/^citizenweb-web-v(\d+\.\d+\.\d+)-r([1-9]\d*)-a([1-9]\d*)$/.exec(release.tag_name||'');
+   if(!canonical&&!historical)continue;
+   let proof;try{proof=JSON.parse(/^<!-- automation:(\{[^\n]*\}) -->$/m.exec(release.body||'')?.[1]||'null');}catch{continue;}
+   const run=successful.find(value=>historical?value.id===Number(historical[2])&&value.run_attempt===Number(historical[3]):value.id===proof?.run_id&&value.run_attempt===proof?.run_attempt);
+   if(!run||run.head_sha!==release.target_commitish||run.repository?.full_name!==automationRepository)continue;
+   const version=(canonical||historical)[1],parts=version.split('.').map(BigInt);
+   if(!baseline||parts.some((value,index)=>value!==baseline.parts[index]&&parts.slice(0,index).every((v,i)=>v===baseline.parts[i])&&value>baseline.parts[index]))baseline={parts,version,run_id:run.id};
+  }
+  if(releases.length<100)break;if(page===10000)throw Error('产品Release分页超限');
+ }
+ const seed=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;if(!/^\d+\.\d+\.\d+$/.test(seed))throw Error('产品版本种子无效');
+ const parts=baseline?[...baseline.parts]:seed.split('.').map(BigInt);if(baseline)parts[2]++;
+ const version=parts.join('.');return {platform,version,tag:automationDisplayName(platform,version),baseline_run_id:baseline?.run_id??null};
+}
+export async function settleAutomationHistory(platform,runId,token){
+ const workflow=automationWorkflows[platform],read=path=>automationRequest(path,token);
+ const current=await read('actions/runs/'+runId);if(!workflow||current?.status!=='completed'||current.path!=='.github/workflows/'+workflow||current.event!=='workflow_dispatch'||current.head_branch!=='main'||current.repository?.full_name!==automationRepository)throw Error('原Run尚未结束或不属于本产品平台');
+ const owned=[];for(let page=1;page<=10000;page++){const value=await read('actions/workflows/'+workflow+'/runs?per_page=100&page='+page);if(!Array.isArray(value?.workflow_runs))throw Error('产品Run分页无效');owned.push(...value.workflow_runs.filter(run=>run.path==='.github/workflows/'+workflow&&run.event==='workflow_dispatch'&&run.head_branch==='main'&&run.status==='completed'));if(value.workflow_runs.length<100)break;if(page===10000)throw Error('产品Run分页超限');}
+ owned.sort((a,b)=>b.run_number-a.run_number||b.run_attempt-a.run_attempt||b.id-a.id);
+ const keep=new Map();for(const run of owned){const key=run.conclusion==='success'?'success':'failure';if(!keep.has(key))keep.set(key,run.id);}
+ const releases=[];for(let page=1;page<=10000;page++){const rows=await read('releases?per_page=100&page='+page);if(!Array.isArray(rows))throw Error('产品Release分页无效');releases.push(...rows);if(rows.length<100)break;if(page===10000)throw Error('产品Release分页超限');}
+ const latestSuccess=keep.get('success');
+ for(const release of releases){
+  let proof;try{proof=JSON.parse(/^<!-- automation:(\{[^\n]*\}) -->$/m.exec(release.body||'')?.[1]||'null');}catch{continue;}
+  const historical=new RegExp('^'+"citizenweb-web-v"+'\\d+\\.\\d+\\.\\d+-r([1-9]\\d*)-a([1-9]\\d*)$').exec(release.tag_name||'');
+  const owner=owned.find(run=>historical?run.id===Number(historical[1])&&run.run_attempt===Number(historical[2]):run.id===proof?.run_id&&run.run_attempt===proof?.run_attempt);
+  const canonical=typeof proof?.version==='string'&&/^\d+\.\d+\.\d+$/.test(proof.version)&&release.tag_name===automationDisplayName(platform,proof.version);
+  if(!historical&&!canonical||!owner||owner.id===latestSuccess||release.target_commitish!==owner.head_sha)continue;
+  await automationRequest('releases/'+release.id,token,{method:'DELETE'});
+  await automationRequest('git/refs/tags/'+encodeURIComponent(release.tag_name),token,{method:'DELETE'});
+ }
+ for(const run of owned)if(![...keep.values()].includes(run.id))await automationRequest('actions/runs/'+run.id,token,{method:'DELETE'});
+ try{
+  const caches=[];for(let page=1;page<=10000;page++){const value=await read('actions/caches?per_page=100&page='+page);if(!Array.isArray(value?.actions_caches))throw Error('缓存分页无效');caches.push(...value.actions_caches);if(value.actions_caches.length<100)break;}
+  const prefix="citizenweb-web-",groups=new Set();
+  for(const cache of caches.filter(item=>item.ref==='refs/heads/main'&&String(item.key).startsWith(prefix)).sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at)||b.id-a.id)){
+   const group=cache.key.slice(prefix.length).split('-').slice(0,2).join('-');if(!groups.has(group)){groups.add(group);continue;}
+   if(Number.isSafeInteger(cache.id)&&cache.id>0)await automationRequest('actions/caches/'+cache.id,token,{method:'DELETE'});
+  }
+ }catch{process.stderr.write('缓存保留维护未完成，不改变本轮构建结果\n');}
+ return {platform,run_id:runId,retained:[...keep.values()]};
+}
+
+export function releaseIdentity(){return {prefix:"公民官网·Web·v"};}
+
+// 正常、失败及边界回归只随产品在 GitHub 执行；本轮未运行。
+if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===import.meta.filename){
+ const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict');
+ test('完整构建只接受所属产品GitHub任务，拒绝本机及其它产品身份',()=>{
+ const good={GITHUB_ACTIONS:'true',GITHUB_REPOSITORY:'crcfrcn/citizenweb',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_WORKFLOW_REF:'crcfrcn/citizenweb/.github/workflows/'+Object.values(automationWorkflows)[0]+'@refs/heads/main',GITHUB_SHA:'a'.repeat(40),GITHUB_RUN_ID:'1',GITHUB_RUN_ATTEMPT:'1'};
+ assert.doesNotThrow(()=>requireAutomationBuild(good));assert.throws(()=>requireAutomationBuild({}),/塔塔自动化/);
+ for(const change of [{GITHUB_REPOSITORY:'other/product'},{GITHUB_REF:'refs/heads/other'},{GITHUB_SHA:'invalid'},{GITHUB_EVENT_NAME:'push'},{GITHUB_WORKFLOW_REF:'other/workflow'}])assert.throws(()=>requireAutomationBuild({...good,...change}),/塔塔自动化/);
+});
 }

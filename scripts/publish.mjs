@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 官网发布独立核验成功自动化的正式资产，拥有Pages上传与部署回读；不创建Tag或Release。
 import {createHash} from 'node:crypto';
+import {automationDisplayName} from './build.mjs';
 import {gunzipSync} from 'node:zlib';
 import {spawn} from 'node:child_process';
 import {mkdir,mkdtemp,rm,writeFile,realpath,lstat,readFile} from 'node:fs/promises';
@@ -75,8 +76,9 @@ export function inspectPackage(bytes,manifestBytes,sumsBytes,version,sourceSHA){
 async function inspectCandidate({run,release,readTag,readAsset,includeContents=false}){
  if(run?.path!==workflow||run.repository?.full_name!==repository||run.head_branch!=='main'||run.event!=='workflow_dispatch'
   ||run.status!=='completed'||run.conclusion!=='success'||!positive(run.id)||!positive(run.run_attempt)||!/^[a-f0-9]{40}$/u.test(run.head_sha||''))fail('成功自动化身份无效');
- const match=/^citizenweb-web-v(\d+\.\d+\.\d+)-r([1-9]\d*)-a([1-9]\d*)$/u.exec(release?.tag_name||'');
- if(!match||Number(match[2])!==run.id||Number(match[3])!==run.run_attempt||!positive(release.id)||release.draft||release.prerelease
+ const match=/^公民官网·Web·v(\d+\.\d+\.\d+)$/u.exec(release?.tag_name||'');
+ let automationProof;try{automationProof=JSON.parse(/^<!-- automation:(\{[^\n]*\}) -->$/m.exec(release?.body||'')?.[1]||'null');}catch{fail('正式版本证明无效');}
+ if(!match||automationProof?.run_id!==run.id||automationProof?.run_attempt!==run.run_attempt||!positive(release.id)||release.draft||release.prerelease
    ||release.target_commitish!==run.head_sha||!Array.isArray(release.assets)||release.assets.length!==names.length)fail('正式Release身份无效');
  const tag=await readTag(release.tag_name);
  if(tag?.ref!=='refs/tags/'+release.tag_name||tag.object?.type!=='commit'||tag.object.sha!==run.head_sha)fail('正式Tag源码不一致');
@@ -106,7 +108,7 @@ async function selectedPublication(request,includeContents=false){
  if(!success.length)fail('缺少成功自动化');
  success.sort((a,b)=>b.run_number-a.run_number||b.run_attempt-a.run_attempt||b.id-a.id);
  const run=success[0],suffix='-r'+run.id+'-a'+run.run_attempt;
- const release=releases.filter(value=>value?.tag_name?.startsWith('citizenweb-web-v')&&value.tag_name.endsWith(suffix));
+ const release=releases.filter(value=>{try{const proof=JSON.parse(/^<!-- automation:(\{[^\n]*\}) -->$/m.exec(value?.body||'')?.[1]||'null');return value?.tag_name===automationDisplayName('web',proof?.version||'')&&proof?.run_id===run.id&&proof?.run_attempt===run.run_attempt;}catch{return false;}});
  if(release.length!==1)fail('成功自动化缺少唯一Release');
  return inspectCandidate({run,release:release[0],readTag:tag=>request('git/ref/tags/'+encodeURIComponent(tag)),
   readAsset:async asset=>(await request(asset.url,{raw:true}))?.body,includeContents});
@@ -175,7 +177,7 @@ export async function deployPages(payload,credentials,{signal,invoke=runTool,req
  if(!exact(payload,['schema','product_id','platform','run_id','release_tag','source_sha','version','archive_sha256','previous_deployment_id','work','node_path'])
   ||payload.schema!==1||payload.product_id!=='citizenweb'||payload.platform!=='web'
   ||!/^[1-9][0-9]{8}$/u.test(payload.run_id||'')||!/^\d+\.\d+\.\d+$/u.test(payload.version||'')
-  ||!new RegExp('^citizenweb-web-v'+payload.version.replaceAll('.','\\.')+'-r[1-9][0-9]*-a[1-9][0-9]*$','u').test(payload.release_tag||'')
+  ||payload.release_tag!==automationDisplayName('web',payload.version)
   ||!/^[a-f0-9]{40}$/u.test(payload.source_sha||'')||!sha(payload.archive_sha256)
   ||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(payload.previous_deployment_id||''))fail('Pages执行身份无效');
  const {work,node_path:node}=payload,base=fileURLToPath(new URL('../target/publish/web/',import.meta.url));
@@ -281,7 +283,7 @@ if(direct&&!testing){
 if(testing){
  const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict'),{gzipSync}=await import('node:zlib'),{Readable}=await import('node:stream');
  function fixture(){
-  const source='a'.repeat(40),version='1.0.0',tag='citizenweb-web-v1.0.0-r42-a1';
+  const source='a'.repeat(40),version='1.0.0',tag='公民官网·Web·v1.0.0';
   const fileBytes=new Map([['package.json',Buffer.from(JSON.stringify({version,devDependencies:{wrangler:'4.121.0'}}))],
    ['package-lock.json',Buffer.from(JSON.stringify({version,packages:{'':{version},'node_modules/wrangler':{version:'4.121.0'}}}))],
    ['dist/index.html',Buffer.from('<html>synthetic</html>')],['dist/app.js',Buffer.from('synthetic')],
@@ -299,7 +301,7 @@ if(testing){
   }blocks.push(Buffer.alloc(1024));
   const archive=gzipSync(Buffer.concat(blocks)),body=new Map([[names[0],archive],[names[1],manifest],[names[2],sums]]);
   const run={id:42,run_attempt:1,path:workflow,repository:{full_name:repository},head_branch:'main',event:'workflow_dispatch',status:'completed',conclusion:'success',head_sha:source};
-  const release={id:7,tag_name:tag,draft:false,prerelease:false,target_commitish:source,assets:names.map((name,index)=>({id:index+1,name,state:'uploaded',size:body.get(name).length,digest:'sha256:'+digest(body.get(name)),url:`https://api.github.com/repos/${repository}/releases/assets/${index+1}`}))};
+  const release={id:7,tag_name:tag,body:'<!-- automation:'+JSON.stringify({version,run_id:42,run_attempt:1})+' -->',draft:false,prerelease:false,target_commitish:source,assets:names.map((name,index)=>({id:index+1,name,state:'uploaded',size:body.get(name).length,digest:'sha256:'+digest(body.get(name)),url:`https://api.github.com/repos/${repository}/releases/assets/${index+1}`}))};
   const request=async path=>path.startsWith('actions/runs?')?{workflow_runs:[run]}:path.startsWith('releases?')?[release]:path.startsWith('git/ref/tags/')?{ref:'refs/tags/'+tag,object:{type:'commit',sha:source}}:{body:Readable.from([body.get(release.assets.find(asset=>asset.url===path)?.name)])};
   return {run,release,body,request};
  }
