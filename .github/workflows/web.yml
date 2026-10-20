@@ -1,60 +1,127 @@
+# 产品自己的唯一自动化工作流；配置文件不执行编译或GitHub操作。
 name: 公民官网·Web
 run-name: 公民官网·Web·v${{ inputs.version }}
 'on':
   workflow_dispatch:
     inputs:
       version:
-        description: 产品 Build 计算的候选版本
+        description: 最新成功版本计算的候选版本，失败不占号
         required: true
         type: string
 concurrency:
-  group: citizenweb-web-release
+  group: citizenweb-web
   cancel-in-progress: false
 permissions:
   contents: write
   actions: write
+defaults:
+  run:
+    shell: bash
+env:
+  PLATFORM: web
+  PRODUCT_VERSION: ${{ inputs.version }}
+  PRODUCT_WORK: ${{ github.workspace }}/target/build/${{ github.run_id }}-${{ github.run_attempt }}
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
 jobs:
-  release:
+  compile:
     name: 公民官网·Web·v${{ inputs.version }}
-    env:
-      PRODUCT_AUTOMATION_VERSION: ${{ inputs.version }}
+    if: github.ref == 'refs/heads/main' && github.repository == 'crcfrcn/citizenweb'
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: "${{ github.sha }}"
-          fetch-depth: 0
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 25.2.1
-      - name: 恢复本产品官方工具与依赖缓存
-        id: compiler_cache
-        continue-on-error: true
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57
-        with:
-          path: |
-            ~/.local/share/product-resources/tools/archives
-            ~/.local/share/product-resources/tools/shared
-            ~/.local/share/product-resources/tools/parsers
-            ~/.local/share/product-resources/rely/archives
-            ~/.local/share/product-resources/rely/objects
-          key: citizenweb-web-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: citizenweb-web-${{ runner.os }}-${{ runner.arch }}-
-      - name: 调用本仓Build并建立正式Web版本
+      - name: 核对准确候选与活动Run
         env:
-          GH_TOKEN: "${{ github.token }}"
-        run: node scripts/build.mjs ci-build web
-      - name: 保存本产品最新缓存
-        if: success() || failure()
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          node --input-type=module -e 'import {automationDisplayName} from "./scripts/build.mjs"; automationDisplayName(process.env.PLATFORM,process.env.PRODUCT_VERSION);'
+          expected="$(node scripts/build.mjs candidate "$PLATFORM")"
+          test "$expected" = "$PRODUCT_VERSION"
+      - name: 恢复官方缓存
+        id: cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
+        timeout-minutes: 2
         continue-on-error: true
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57
         with:
           path: |
-            ~/.local/share/product-resources/tools/archives
-            ~/.local/share/product-resources/tools/shared
-            ~/.local/share/product-resources/tools/parsers
-            ~/.local/share/product-resources/rely/archives
-            ~/.local/share/product-resources/rely/objects
-          key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
+            target/cache
+          key: citizenweb-web-official-25.2.1-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: citizenweb-web-official-25.2.1-${{ hashFiles('package-lock.json') }}-
+      - name: 真实代码回归与严格分析
+        run: |
+          node scripts/build.mjs test "$PLATFORM"
+      - name: 编译本平台正式产物
+        run: |
+          node scripts/build.mjs build "$PLATFORM"
+      - name: 装配并核对正式附件
+        run: |
+          node scripts/build.mjs package "$PLATFORM"
+      - name: 公民官网·Web·v${{ inputs.version }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: 公民官网·Web·v${{ inputs.version }}
+          path: ${{ env.PRODUCT_WORK }}/artifact/*
+          if-no-files-found: error
+      - name: 创建正式Tag和Release并逐件回读
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          name="公民官网·Web·v$PRODUCT_VERSION"
+          encoded="$(printf '%s' "$name" | jq -sRr @uri)"
+          node --input-type=module <<'JS'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          const proof=JSON.parse(readFileSync(process.env.PRODUCT_WORK+'/proof.json'));
+          writeFileSync(process.env.PRODUCT_WORK+'/notes.md','<!-- automation:'+JSON.stringify(proof)+' -->\n');
+          JS
+          created_tag=0
+          rollback() {
+            code=$?
+            if [ "$code" -ne 0 ] && [ "$created_tag" = 1 ]; then
+              if gh release view "$name" --repo "$GITHUB_REPOSITORY" --json body > "$PRODUCT_WORK/rollback.json"; then
+                if jq -er --arg id "$GITHUB_RUN_ID" '.body|capture("automation:(?<proof>[^\n]*) -->").proof|fromjson|select(.run_id==($id|tonumber))' "$PRODUCT_WORK/rollback.json" >/dev/null; then
+                  gh release delete "$name" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || echo '本轮正式候选撤销失败' >&2
+                fi
+              else
+                gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$encoded" || echo '本轮Tag撤销失败' >&2
+              fi
+            fi
+            exit "$code"
+          }
+          trap rollback EXIT
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$name" -f "sha=$GITHUB_SHA" > "$PRODUCT_WORK/tag.json"
+          created_tag=1
+          assets=("$PRODUCT_WORK"/artifact/*)
+          gh release create "$name" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$name" --notes-file "$PRODUCT_WORK/notes.md"
+          mkdir "$PRODUCT_WORK/readback"
+          gh release download "$name" --repo "$GITHUB_REPOSITORY" --dir "$PRODUCT_WORK/readback"
+          for file in "${assets[@]}"; do cmp "$file" "$PRODUCT_WORK/readback/$(basename "$file")"; done
+          gh release edit "$name" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest=false
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$encoded" > "$PRODUCT_WORK/release.json"
+          jq -e --arg name "$name" --arg sha "$GITHUB_SHA" --argjson count 3 '.name==$name and .tag_name==$name and .target_commitish==$sha and .draft==false and .prerelease==false and (.assets|length)==$count' "$PRODUCT_WORK/release.json" >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$encoded" | jq -e --arg sha "$GITHUB_SHA" '.object.type=="commit" and .object.sha==$sha' >/dev/null
+      - name: 保存官方缓存
+        if: always()
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809
+        timeout-minutes: 2
+        continue-on-error: true
+        with:
+          path: target/cache
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - name: 清理本轮现场
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib,os,shutil
+          p=pathlib.Path(os.environ['PRODUCT_WORK'])
+          if p.exists():shutil.rmtree(p)
+          PY

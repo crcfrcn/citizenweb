@@ -14,3 +14,12 @@ export const manifest=Object.freeze({
   }
 });
 export function describeConfiguration(){return JSON.parse(JSON.stringify(manifest));}
+
+// 只有产品、工具和入口声明；所有执行函数归build.mjs。
+export const repository="crcfrcn/citizenweb";
+export const tools=Object.freeze({"node": "25.2.1"});
+export const platforms=Object.freeze({"web": "Web"});
+export const initialVersion="1.0.12";
+export const artifactPrefix='公民官网·Web·v';
+export const artifactSuffixes=Object.freeze(['tgz','json','sha256']);
+export {describeAction} from './build.mjs';

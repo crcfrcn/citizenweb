@@ -1,0 +1,112 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,cpSync,readFileSync,rmSync,existsSync,readdirSync} from 'node:fs';
+import {join} from 'node:path';
+import {root,automationDisplayName,nextVersion,retainedRuns,candidate,automate,cleanupRuns,run} from '../scripts/build.mjs';
+import {initialVersion,platforms} from '../scripts/config.mjs';
+const platform=Object.keys(platforms)[0];
+const row=(id,conclusion,status='completed')=>({id,status,conclusion,updated_at:new Date(id*1000).toISOString(),head_sha:'a'.repeat(40),path:'.github/workflows/'+platform+'.yml',head_branch:'main',run_attempt:1,display_title:automationDisplayName(platform,'1.2.3')});
+test('配置仅声明和引用，导入不派发、不生成现场',async()=>{
+ const config=await import('../scripts/config.mjs');assert.equal(config.describeConfiguration().schema,1);
+ const source=readFileSync(join(root,'scripts/config.mjs'),'utf8');assert.doesNotMatch(source,/\b(?:spawn|execFile|fetch|dispatch|readFile|writeFile|nextVersion|cleanupRuns)\s*\(/u);
+ assert.equal(Object.hasOwn(config.describeConfiguration().configuration.items[0]||{},'value'),false);
+});
+test('准确名称和版本边界',()=>{
+ assert.match(automationDisplayName(platform,'1.2.3'),/·v1\.2\.3$/u);
+ for(const version of ['1.2','01.2.3','1.2.3\n','1.2.3-beta',null])assert.throws(()=>automationDisplayName(platform,version));
+ assert.throws(()=>automationDisplayName('other','1.2.3'));
+});
+test('成功才递增，失败重试沿用候选',()=>{
+ assert.equal(nextVersion(platform,[]),initialVersion);assert.equal(nextVersion(platform,[row(1,'success'),row(2,'failure')]),'1.2.4');
+ const invalid=row(3,'success');invalid.display_title=automationDisplayName(platform,'1.2.3')+'extra';assert.throws(()=>nextVersion(platform,[invalid]));
+});
+test('最新成功和失败各一条，活动Run全部保留',()=>{
+ const rows=[row(1,'success'),row(2,'failure'),row(3,'success'),row(4,'cancelled'),row(5,null,'in_progress')];assert.deepEqual([...retainedRuns(rows)].sort(),[3,4,5]);
+});
+test('活动Run阻止新派发，当前CI原Run不误拒绝',async()=>{
+ const read=async()=>({workflow_runs:[row(11,null,'queued')]});await assert.rejects(candidate(platform,{read,currentRun:0}),/活动/u);
+ assert.equal(await candidate(platform,{read,currentRun:11}),initialVersion);
+});
+test('派发回执不确定只请求一次',async()=>{
+ let calls=0;await assert.rejects(automate(platform,{read:async()=>({workflow_runs:[]}),dispatch:async()=>{calls++;return {};},notify:()=>{}}),/不确定/u);assert.equal(calls,1);
+});
+test('旧失败删除后回查，不碰活动和另一类最新记录',async()=>{
+ let rows=[row(1,'failure'),row(2,'failure'),row(3,null,'in_progress')];const deleted=[];
+ const read=async path=>{
+  if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};if(path.startsWith('releases?'))return [];
+  const value=rows.find(row=>path==='actions/runs/'+row.id);if(value)return value;throw Object.assign(Error('HTTP 404'),{status:404});
+ };
+ const result=await cleanupRuns(platform,{read,remove:async path=>{deleted.push(path);rows=rows.filter(row=>path!=='actions/runs/'+row.id);}});
+ assert.equal(result.completed,true);assert.deepEqual(deleted,['actions/runs/1']);assert.deepEqual(rows.map(row=>row.id),[2,3]);
+});
+test('新成功资产未确认时保留旧成功',async()=>{
+ let deleted=0;const rows=[row(1,'success'),row(2,'success')];await assert.rejects(cleanupRuns(platform,{read:async path=>path.startsWith('releases?')?[]:{workflow_runs:rows},remove:async()=>{deleted++;}}),/保留旧成功/u);assert.equal(deleted,0);
+});
+test('真实子进程非零退出和取消均失败',async()=>{
+ await assert.rejects(run(process.execPath,['-e','process.exit(7)']),/执行失败/u);
+ const controller=new AbortController(),pending=run(process.execPath,['-e','setInterval(()=>{},1000)'],{signal:controller.signal});setTimeout(()=>controller.abort(),50);await assert.rejects(pending);
+});
+// 钱包装配和官网内容回归均使用所属产品临时现场，不访问真实凭据或GitHub。
+if(platform!=='web'){
+ const {materializeInputs}=await import('../scripts/build.mjs'),{generatePlatformIcons}=await import('../icons/generate.mjs');
+ test('普通平台工程、原锁及官方图标完整交付',t=>{
+  const parent=join(root,'target/test');mkdirSync(parent,{recursive:true});const work=mkdtempSync(join(parent,'layout-')),project=join(work,'source-view');mkdirSync(project);t.after(()=>rmSync(work,{recursive:true,force:true}));
+  for(const name of ['ios','android','icons','Podfile.lock'])cpSync(join(root,name),join(project,name),{recursive:true});materializeInputs(root,project);
+  for(const name of ['ios/Runner.xcodeproj/project.pbxproj','ios/Runner/HardwareSecretvaultPlugin.swift','ios/signer/citizenwallet_signer.podspec','android/app/src/test/kotlin/com/crcfrcn/citizenwallet/HardwareSecretvaultPluginTest.kt'])assert.ok(existsSync(join(project,name)),name);
+  assert.ok(readFileSync(join(project,'ios/Podfile.lock')).equals(readFileSync(join(root,'Podfile.lock'))));
+  const android=generatePlatformIcons(project,'android'),ios=generatePlatformIcons(project,'ios');assert.equal(readdirSync(android).length,5);assert.ok(existsSync(join(ios,'AppIcon.appiconset/Contents.json')));
+  assert.throws(()=>generatePlatformIcons(root,'ios'),/target/u);
+ });
+}else{
+ const {whitepaperContent,httpsOptions}=await import('../scripts/build.mjs');
+ test('白皮书正文和内嵌图片交付保持',()=>{
+  const names=[],result=JSON.parse(whitepaperContent('# 原文\n![图](./assets/one.png)',name=>{names.push(name);return Buffer.from('synthetic');}));assert.deepEqual(names,['one.png']);assert.equal(result.markdown,'# 原文\n![图](data:image/png;base64,c3ludGhldGlj)');
+  assert.equal(JSON.parse(whitepaperContent('纯正文',()=>{throw Error('不应读取图片');})).markdown,'纯正文');
+ });
+ test('HTTPS缺件明确失败，配置不含生成插件',()=>{assert.throws(()=>httpsOptions({}),/HTTPS/u);const source=readFileSync(join(root,'config/vite.config.ts'),'utf8');assert.doesNotMatch(source,/generateBundle|writeFile|whitepaperContent|readFileSync/u);});
+}
+
+// 删除中断不能丢失原正式版本的归属；重试继续同一批终态，不重跑业务。
+test('删除Tag后Release失败，重试仍清理原Release与Run',async()=>{
+ const old=row(1,'failure'),fresh=row(2,'failure');let rows=[old,fresh],tag=true,release=true,failOnce=true;
+ const proof={run_id:1,platform},record={id:10,tag_name:old.display_title,target_commitish:old.head_sha,body:'<!-- automation:'+JSON.stringify(proof)+' -->'};
+ const missing=()=>{throw Object.assign(Error('HTTP 404'),{status:404});};
+ const read=async path=>{if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};if(path.startsWith('releases?'))return release?[record]:[];if(path==='releases/10')return release?record:missing();if(path.startsWith('git/ref/tags/'))return tag?{object:{type:'commit',sha:old.head_sha}}:missing();return rows.find(value=>path==='actions/runs/'+value.id)||missing();};
+ const remove=async path=>{if(path.startsWith('git/refs/tags/'))tag=false;else if(path==='releases/10'){if(failOnce){failOnce=false;throw Error('HTTP 503');}release=false;}else if(path==='actions/runs/1')rows=rows.filter(value=>value.id!==1);};
+ await assert.rejects(cleanupRuns(platform,{read,remove}),/503/u);assert.equal(tag,false);assert.equal(release,true);assert.equal(rows.length,2);
+ assert.deepEqual((await cleanupRuns(platform,{read,remove})).deleted,[1]);assert.equal(release,false);
+});
+
+// 代码职责边界：编译不调用发布入口，发布执行文件不生成归档或测试夹具。
+test('构建与发布执行职责分离',()=>{
+ const build=readFileSync(join(root,'scripts/build.mjs'),'utf8'),publish=readFileSync(join(root,'scripts/publish.mjs'),'utf8');
+ assert.doesNotMatch(build,/publish\.mjs/u);
+ assert.doesNotMatch(publish,/node:test|function\s+(?:fixture|buildProduct|packageProduct)\b|['"]-czf['"]/u);
+ assert.doesNotMatch(publish,/from\s*['"]\.\/build\.mjs['"]/u);
+});
+
+// 用Node内置Mock仅模拟本用例的ps查询拒绝，不修改进程权限。
+test('EPERM保留工具原失败与现场，工具退出零也不能冒充收尾成功',async t=>{
+ const childProcess=(await import('node:child_process')).default,spawnSync=childProcess.spawnSync;
+ t.mock.method(childProcess,'spawnSync',(command,...args)=>command==='/bin/ps'?{error:Object.assign(Error('synthetic ps permission'),{code:'EPERM'}),status:null,stdout:''}:spawnSync(command,...args));
+ for(const code of [7,0])await assert.rejects(run(process.execPath,['-e',`process.stderr.write("synthetic-tool-result");process.exit(${code});`]),error=>{
+  assert.equal(error.keepWork,true);assert.equal(error.processId>0,true);assert.equal(error.groupId,error.processId);assert.match(error.message,/EPERM/u);
+  if(code){assert.match(error.message,/退出码=7/u);assert.match(error.message,/synthetic-tool-result/u);assert.match(error.cause.message,/退出码=7/u);}
+  return true;
+ });
+});
+
+// 无效快照不得成功；真实后代仍在时必须等它完成，才允许消费结果。
+test('ps空表和缺少调用进程的结果均保留现场',async t=>{
+ const childProcess=(await import('node:child_process')).default;
+ for(const stdout of ['', 'invalid', '1 1\n']){
+  const mock=t.mock.method(childProcess,'spawnSync',()=>({status:0,stdout}));
+  try{await assert.rejects(run(process.execPath,['-e','process.exit(0)']),error=>{assert.equal(error.keepWork,true);assert.match(error.message,/查询结果无效/u);return true;});}finally{mock.mock.restore();}
+ }
+});
+test('真实同组后代完成后才返回工具成功',async t=>{
+ const base=join(root,'target/test');mkdirSync(base,{recursive:true});const work=mkdtempSync(join(base,'descendant-')),marker=join(work,'done');t.after(()=>rmSync(work,{recursive:true,force:true}));
+ const nested=`setTimeout(()=>{require('node:fs').writeFileSync(${JSON.stringify(marker)},'done');},700);`;
+ const source=`require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(nested)}],{stdio:'ignore'}).unref();`;
+ await run(process.execPath,['-e',source]);assert.equal(readFileSync(marker,'utf8'),'done');
+});
