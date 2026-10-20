@@ -40,9 +40,8 @@ function sourceView(work,names){
  for(const name of names)copy(join(root,name),join(project,name));return project;
 }
 // 每次调用拥有独立进程组；取消或未退出的后代禁止提前清场。
-export async function run(command,args,{cwd=root,env={},capture=false,input,githubToken,signal=controller.signal}={}){
+export async function run(command,args,{cwd=root,env={},capture=false,input,signal=controller.signal}={}){
  signal.throwIfAborted();const environment={...process.env,...env};delete environment.GH_TOKEN;delete environment.GITHUB_TOKEN;
- if(githubToken)environment.GH_TOKEN=githubToken;
  return new Promise((ok,fail)=>{
   const child=spawn(command,args,{cwd,env:environment,detached:true,stdio:[input===undefined?'ignore':'pipe',capture?'pipe':process.stderr,'pipe']});
   let output='',diagnostic='',failure,timer;
@@ -83,11 +82,14 @@ function claimCache(work){
  catch{if(owned)rmdirSync(lock);const base=directory(join(work,'cache'));return {base,release(){}};}
 }
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
-async function github(path,{method='GET',body,token}={}){
+// 产品直接使用GitHub官方REST；控制台只交付短期令牌，不依赖宿主PATH中的gh。
+export async function github(path,{method='GET',body,token=process.env.GH_TOKEN||process.env.GITHUB_TOKEN,fetchImpl=fetch}={}){
  if(typeof path!=='string'||path.startsWith('/')||path.includes('..')||/[\r\n]/u.test(path))throw Error('GitHub产品路径无效');
- const args=['api','repos/'+repository+'/'+path,'--method',method,'-H','X-GitHub-Api-Version: 2026-03-10'];
- if(body!==undefined)args.push('--input','-');
- const text=await run('gh',args,{capture:true,githubToken:token,input:body===undefined?undefined:JSON.stringify(body)});return text?JSON.parse(text):null;
+ const response=await fetchImpl('https://api.github.com/repos/'+repository+'/'+path,{method,redirect:'error',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(30000)]),
+  headers:{...(token?{Authorization:'Bearer '+token}:{}),Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':repository.split('/')[1],'X-GitHub-Api-Version':'2026-03-10'},
+  ...(body===undefined?{}:{body:JSON.stringify(body)})});
+ if(!response.ok)throw Object.assign(Error('GitHub HTTP '+response.status),{status:response.status});
+ return response.status===204?null:response.json();
 }
 async function rowsFor(platform,read){
  automationDisplayName(platform,initialVersion);const rows=[];
@@ -102,37 +104,45 @@ function releaseProof(release){
  try{return JSON.parse(/^<!-- automation:(\{[^\n]*\}) -->$/mu.exec(release.body||'')?.[1]||'null');}catch{return null;}
 }
 // 只删除同一产品平台已结束的旧记录；新成功正式资产完整后才能淘汰旧成功。
-export async function cleanupRuns(platform,{token=process.env.GH_TOKEN,read=path=>github(path,{token}),remove=path=>github(path,{method:'DELETE',token})}={}){
- const rows=await rowsFor(platform,read),keep=retainedRuns(rows),stale=rows.filter(row=>row.status==='completed'&&!keep.has(row.id));
- if(!stale.length)return {completed:true,deleted:[]};
+export async function cleanupRuns(platform,{token=process.env.GH_TOKEN||process.env.GITHUB_TOKEN,read=path=>github(path,{token}),remove=path=>github(path,{method:'DELETE',token}),completedRun}={}){
+ const rows=await rowsFor(platform,read);
+ // GitHub列表可能晚于单Run终态；本轮真实终态参与同一次保留计算。
+ if(completedRun){const index=rows.findIndex(row=>row.id===completedRun.id);if(index<0)rows.push(completedRun);else rows[index]=completedRun;}
+ const keep=retainedRuns(rows),stale=rows.filter(row=>row.status==='completed'&&!keep.has(row.id));
+ if(!stale.length)return {completed:true,deleted:[],kept:[...keep]};
  const releases=[];for(let page=1;;page++){const values=await read('releases?per_page=100&page='+page);releases.push(...values);if(values.length<100)break;}
  const absent=async path=>{try{await read(path);return false;}catch(error){if(error.status===404||/HTTP 404/u.test(error.message))return true;throw error;}};
- const success=rows.find(row=>keep.has(row.id)&&row.conclusion==='success'&&row.status==='completed');
- if(stale.some(row=>row.conclusion==='success')){
+ const success=rows.find(row=>keep.has(row.id)&&row.conclusion==='success'&&row.status==='completed');let blocked;
+ if(stale.some(row=>row.conclusion==='success'))try{
   const release=releases.find(value=>releaseProof(value)?.run_id===success?.id);
   if(!release||release.draft||release.prerelease||release.tag_name!==success.display_title||release.assets?.length!==assetCount(platform))throw Error('最新成功正式Release或附件未确认，保留旧成功');
-  const tag=await read('git/ref/tags/'+encodeURIComponent(release.tag_name));if(tag.object?.type!=='commit'||tag.object.sha!==success.head_sha)throw Error('新成功Tag提交不符');
-  const artifacts=await read('actions/runs/'+success.id+'/artifacts?per_page=100');if(artifacts.artifacts?.filter(value=>value.name===success.display_title&&!value.expired&&value.size_in_bytes>0).length!==1)throw Error('最新成功Artifact未确认');
- }
+  const tag=await read('git/ref/tags/'+encodeURIComponent(release.tag_name));if(tag.object?.type!=='commit'||tag.object.sha!==success.head_sha)throw Error('新成功Tag提交不符，保留旧成功');
+  const artifacts=await read('actions/runs/'+success.id+'/artifacts?per_page=100');if(artifacts.artifacts?.filter(value=>value.name===success.display_title&&!value.expired&&value.size_in_bytes>0).length!==1)throw Error('最新成功Artifact未确认，保留旧成功');
+ }catch(error){blocked=error;}
  const deleted=[];
  for(const row of stale){
+  // 保护旧成功不阻挡旧失败清理；真正DELETE失败立即停止，不冒充清理完成。
+  if(blocked&&row.conclusion==='success')continue;
   const fresh=await read('actions/runs/'+row.id);if(fresh.status!=='completed'||fresh.head_sha!==row.head_sha||fresh.path!==row.path||fresh.conclusion!==row.conclusion)throw Error('删除前Run身份或终态变化');
   for(const release of releases){
    const proof=releaseProof(release);
-   // 历史官网记录只按其官方Run/提交回执核对删除，不恢复旧执行接口或旧命名。
    const historical=Object.keys(platforms).length===1&&release.body===`Source: ${row.head_sha}\nRun: ${row.id} / ${row.run_attempt}`;
    if(!(proof?.run_id===row.id&&proof.platform===platform)&&!historical)continue;
    if(release.target_commitish!==row.head_sha)throw Error('旧Release提交不符');
    const tagPath='git/ref/tags/'+encodeURIComponent(release.tag_name);
-   // 先删Tag后删Release；中断重试仍有原Release回执，不遗失待清理Tag的归属。
+   // 先删Tag后删Release，失败重试仍以原Release回执确认归属。
    if(!await absent(tagPath)){const tag=await read(tagPath);if(tag.object?.type!=='commit'||tag.object.sha!==row.head_sha)throw Error('旧Tag归属不符');await remove('git/refs/tags/'+encodeURIComponent(release.tag_name));}
    await remove('releases/'+release.id);
    if(!await absent('releases/'+release.id)||!await absent(tagPath))throw Error('旧Release或Tag删除未确认');
   }
   await remove('actions/runs/'+row.id);if(!await absent('actions/runs/'+row.id))throw Error('旧Run删除未确认');deleted.push(row.id);
  }
- const remaining=await rowsFor(platform,read),expected=retainedRuns(remaining);if(remaining.some(row=>row.status==='completed'&&!expected.has(row.id)))throw Error('旧记录清理未完成');
- return {completed:true,deleted};
+ const remaining=await rowsFor(platform,read);
+ if(completedRun){const index=remaining.findIndex(row=>row.id===completedRun.id);if(index<0)remaining.push(completedRun);else remaining[index]=completedRun;}
+ const expected=retainedRuns(remaining);
+ if(blocked)throw blocked;
+ if(remaining.some(row=>row.status==='completed'&&!expected.has(row.id)))throw Error('旧记录清理未完成');
+ return {completed:true,deleted,kept:[...expected]};
 }
 export async function automate(platform,{token,read=path=>github(path,{token}),dispatch=spec=>github('actions/workflows/'+spec.workflow+'/dispatches',{method:'POST',body:{ref:spec.ref,inputs:spec.inputs},token}),notify=report,wait=ms=>new Promise(done=>setTimeout(done,ms))}={}){
  automationDisplayName(platform,initialVersion);const base=directory(join(root,'target/automation')),lock=join(base,platform);mkdirSync(lock);
@@ -142,8 +152,14 @@ export async function automate(platform,{token,read=path=>github(path,{token}),d
   for(;;){
    let value;try{value=await read('actions/runs/'+runID);}catch(error){if(!/HTTP (408|429|500|502|503|504)/u.test(error.message))throw error;await wait(3000);continue;}
    if(value.id!==runID||value.path!=='.github/workflows/'+platform+'.yml'||value.head_branch!=='main')throw Error('原Run身份不符');
-   if(value.status==='completed'){await cleanupRuns(platform,{token,read});notify({event:'run',run:value});break;}
-   notify({event:'run',run:value});notify({event:'jobs',jobs:await read('actions/runs/'+runID+'/jobs?per_page=100')});await wait(3000);
+   // 真实终态先交付界面，清理失败不能把已结束Run变成未确认。
+   notify({event:'run',run:value});
+   if(value.status==='completed'){
+    try{const result=await cleanupRuns(platform,{token,read,completedRun:value});notify({event:'output',stream:'stdout',data:Buffer.from('清理完成：最新成功、最新失败各最多一条；实际删除旧Run '+result.deleted.length+' 条\n').toString('base64')});}
+    catch(error){notify({event:'output',stream:'stderr',data:Buffer.from('清理未完成：'+error.message+'\n').toString('base64')});throw error;}
+    break;
+   }
+   notify({event:'jobs',jobs:await read('actions/runs/'+runID+'/jobs?per_page=100')});await wait(3000);
   }return {runID};
  }finally{rmdirSync(lock);}
 }

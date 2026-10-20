@@ -110,3 +110,30 @@ test('真实同组后代完成后才返回工具成功',async t=>{
  const source=`require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(nested)}],{stdio:'ignore'}).unref();`;
  await run(process.execPath,['-e',source]);assert.equal(readFileSync(marker,'utf8'),'done');
 });
+
+
+// GitHub传输使用官方REST；删除不能依赖控制台最小PATH中的gh。
+test('GitHub REST保留方法、令牌及HTTP状态，不启动命令',async()=>{
+ const {github}=await import('../scripts/build.mjs');let called=0;
+ assert.equal(await github('actions/runs/1',{method:'DELETE',token:'synthetic',fetchImpl:async(url,options)=>{called++;assert.match(url,/\/actions\/runs\/1$/u);assert.equal(options.method,'DELETE');assert.equal(options.headers.Authorization,'Bearer synthetic');return new Response(null,{status:204});}}),null);
+ assert.equal(called,1);
+ await assert.rejects(github('actions/runs/1',{fetchImpl:async()=>new Response('',{status:404})}),error=>error.status===404);
+});
+test('新成功尚未验真不阻挡旧失败实际删除',async()=>{
+ let rows=[row(1,'success'),row(2,'failure'),row(3,'success'),row(4,'failure')];const deleted=[];
+ const read=async path=>{if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};if(path.startsWith('releases?'))return [];const value=rows.find(value=>path==='actions/runs/'+value.id);if(value)return value;throw Object.assign(Error('HTTP 404'),{status:404});};
+ await assert.rejects(cleanupRuns(platform,{read,remove:async path=>{deleted.push(path);rows=rows.filter(value=>path!=='actions/runs/'+value.id);}}),/保留旧成功/u);
+ assert.deepEqual(deleted,['actions/runs/2']);assert.deepEqual(rows.map(value=>value.id),[1,3,4]);
+});
+test('删除后仍存在必须明确清理失败',async()=>{
+ const rows=[row(1,'failure'),row(2,'failure')];
+ await assert.rejects(cleanupRuns(platform,{read:async path=>path.startsWith('actions/workflows/')?{workflow_runs:rows}:path.startsWith('releases?')?[]:rows[0],remove:async()=>{}}),/旧Run删除未确认/u);
+});
+test('Run终态先于清理交付，清理失败不丢失真实失败',async t=>{
+ const previous=row(1,'failure'),current=row(2,'failure'),events=[];let terminal=false;
+ const read=async path=>path.startsWith('actions/workflows/')?{workflow_runs:[previous]}:path.startsWith('releases?')?[]:path==='actions/runs/2'?current:previous;
+ t.mock.method(globalThis,'fetch',async(_url,options)=>{assert.equal(options.method,'DELETE');assert.equal(terminal,true);return new Response('',{status:403});});
+ await assert.rejects(automate(platform,{read,dispatch:async()=>({workflow_run_id:2}),notify:value=>{events.push(value);if(value.event==='run'&&value.run.status==='completed')terminal=true;}}),/HTTP 403/u);
+ assert.equal(events.find(value=>value.event==='run').run.conclusion,'failure');
+ assert.match(Buffer.from(events.find(value=>value.event==='output').data,'base64').toString(),/清理未完成/u);
+});
