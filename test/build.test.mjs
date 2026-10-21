@@ -180,3 +180,31 @@ test('清理权限失败真实抛出，不改写本轮状态或触发编译派�
  let calls=0;await assert.rejects(cleanupRuns(platform,{read,currentRun:3,result:'failure',remove:async path=>{calls++;assert.equal(path,'actions/runs/1');throw Object.assign(Error('HTTP 403'),{status:403});}}),/HTTP 403/u);
  assert.equal(calls,1);assert.equal(current.status,'in_progress');assert.equal(current.conclusion,null);
 });
+
+// 旧push与派发记录属于同一平台历史；候选版本不能因此读取无版本的旧成功记录。
+test('清理覆盖旧push及分页，候选仍只查派发，活动记录全部保留',async()=>{
+ for(const target of Object.keys(platforms)){
+  const make=(id,conclusion,event='workflow_dispatch',status='completed')=>({...row(id,conclusion,status),path:'.github/workflows/'+target+'.yml',event,repository:{full_name:repository}});
+  let rows=[make(1,'failure','push'),make(2,'success'),make(3,'failure'),make(4,null,'push','in_progress')];const deleted=[],queries=[];
+  const missing=()=>{throw Object.assign(Error('HTTP 404'),{status:404});};
+  const read=async path=>{
+   if(path.startsWith('actions/workflows/')){
+    queries.push(path);const url=new URL('https://api.github.com/'+path);assert.equal(url.searchParams.get('branch'),'main');
+    if(url.searchParams.has('event')){assert.equal(url.searchParams.get('event'),'workflow_dispatch');return {workflow_runs:[]};}
+    const legacy=Array.from({length:100},(_,index)=>({...make(100+index,'failure','push'),updated_at:new Date(0).toISOString()})).filter(row=>!deleted.includes('actions/runs/'+row.id));
+    const all=[...legacy,...rows],page=Number(url.searchParams.get('page'));return {workflow_runs:all.slice((page-1)*100,page*100)};
+   }
+   if(path.startsWith('releases?'))return [];
+   const legacy=/^actions\/runs\/(\d+)$/u.exec(path);if(legacy&&Number(legacy[1])>=100&&Number(legacy[1])<200)return deleted.includes(path)?missing():make(Number(legacy[1]),'failure','push');
+   return rows.find(value=>path==='actions/runs/'+value.id)||missing();
+  };
+  const result=await cleanupRuns(target,{read,remove:async path=>{deleted.push(path);rows=rows.filter(value=>path!=='actions/runs/'+value.id);}});
+  assert.equal(result.completed,true);assert.equal(deleted.length,101);assert.ok(deleted.includes('actions/runs/1'));assert.deepEqual(rows.map(row=>row.id),[2,3,4]);assert.deepEqual([...result.kept].sort(),[2,3,4]);
+  assert.equal(await candidate(target,{read,currentRun:0}),initialVersion);assert.ok(queries.at(-1).includes('event=workflow_dispatch'));
+ }
+});
+test('清理拒绝其他仓库、平台或分支记录，不删除归属不符对象',async()=>{
+ for(const invalid of [{path:'.github/workflows/other.yml'},{head_branch:'other'},{repository:{full_name:'other/repo'}}]){
+  let deleted=0;await assert.rejects(cleanupRuns(platform,{read:async()=>({workflow_runs:[{...row(1,'failure'),...invalid}]}),remove:async()=>{deleted++;}}),/归属不符/u);assert.equal(deleted,0);
+ }
+});

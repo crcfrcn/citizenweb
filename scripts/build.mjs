@@ -94,9 +94,14 @@ export async function github(path,{method='GET',body,token=process.env.GH_TOKEN|
  if(!response.ok)throw Object.assign(Error('GitHub HTTP '+response.status),{status:response.status});
  return response.status===204?null:response.json();
 }
-async function rowsFor(platform,read){
+async function rowsFor(platform,read,allEvents=false){
  automationDisplayName(platform,initialVersion);const rows=[];
- for(let page=1;;page++){const result=await read('actions/workflows/'+platform+'.yml/runs?branch=main&event=workflow_dispatch&per_page=100&page='+page);if(!Array.isArray(result.workflow_runs))throw Error('GitHub Run列表无效');rows.push(...result.workflow_runs);if(result.workflow_runs.length<100)return rows;}
+ for(let page=1;;page++){
+  const result=await read('actions/workflows/'+platform+'.yml/runs?branch=main&'+(allEvents?'':'event=workflow_dispatch&')+'per_page=100&page='+page);
+  if(!Array.isArray(result.workflow_runs))throw Error('GitHub Run列表无效');
+  if(allEvents&&result.workflow_runs.some(row=>row.path!=='.github/workflows/'+platform+'.yml'||row.head_branch!=='main'||(row.repository?.full_name&&row.repository.full_name!==repository)))throw Error('清理Run归属不符');
+  rows.push(...result.workflow_runs);if(result.workflow_runs.length<100)return rows;
+ }
 }
 export async function candidate(platform,{token=process.env.GH_TOKEN,read=path=>github(path,{token}),currentRun=Number(process.env.GITHUB_RUN_ID)}={}){
  const rows=await rowsFor(platform,read);
@@ -107,7 +112,8 @@ function releaseProof(release){
 }
 // 只删除同一产品平台已结束的旧记录；新成功正式资产完整后才能淘汰旧成功。
 export async function cleanupRuns(platform,{token=process.env.GH_TOKEN||process.env.GITHUB_TOKEN,read=path=>github(path,{token}),remove=path=>github(path,{method:'DELETE',token}),currentRun=0,result,sourceSha,attempt}={}){
- const rows=await rowsFor(platform,read);let current;
+ // 历史清理覆盖本平台main的全部触发事件，候选版本查询仍只读workflow_dispatch。
+ const rows=await rowsFor(platform,read,true);let current;
  if(currentRun||result!==undefined){
   if(!Number.isSafeInteger(currentRun)||currentRun<=0||!['success','failure','cancelled'].includes(result))throw Error('本轮清理输入无效');
   current=await read('actions/runs/'+currentRun);
@@ -129,7 +135,7 @@ export async function cleanupRuns(platform,{token=process.env.GH_TOKEN||process.
  for(const row of stale){
   // 保护旧成功不阻挡旧失败清理；真正DELETE失败立即停止，不冒充清理完成。
   if(blocked&&row.conclusion==='success')continue;
-  const fresh=await read('actions/runs/'+row.id);if(fresh.status!=='completed'||fresh.head_sha!==row.head_sha||fresh.path!==row.path||fresh.conclusion!==row.conclusion)throw Error('删除前Run身份或终态变化');
+  const fresh=await read('actions/runs/'+row.id);if(fresh.status!=='completed'||fresh.head_sha!==row.head_sha||fresh.path!==row.path||fresh.head_branch!==row.head_branch||fresh.run_attempt!==row.run_attempt||fresh.event!==row.event||fresh.conclusion!==row.conclusion)throw Error('删除前Run身份或终态变化');
   for(const release of releases){
    const proof=releaseProof(release);
    const historical=Object.keys(platforms).length===1&&release.body===`Source: ${row.head_sha}\nRun: ${row.id} / ${row.run_attempt}`;
@@ -146,7 +152,7 @@ export async function cleanupRuns(platform,{token=process.env.GH_TOKEN||process.
   try{const assets=await read('actions/runs/'+row.id+'/artifacts?per_page=100');if(!Array.isArray(assets.artifacts)||assets.artifacts.length)throw Error('旧Run附件删除未确认');}catch(error){if(error.status!==404&&!/HTTP 404/u.test(error.message))throw error;}
   deleted.push(row.id);
  }
- const remaining=await rowsFor(platform,read);
+ const remaining=await rowsFor(platform,read,true);
  if(current){const index=remaining.findIndex(row=>row.id===currentRun);if(index<0)remaining.push(current);else remaining[index]=current;}
  const expected=retainedRuns(remaining,{currentRun,result});
  if(blocked)throw blocked;
