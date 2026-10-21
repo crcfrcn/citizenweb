@@ -30,7 +30,7 @@ scripts/config.mjs仅声明产品、工具、平台、配置需求与公开入�
 
 本机与GitHub均沿原始依赖锁执行，缺缓存按原锁正常取得；真实下载、测试、编译、签名或验收失败必须失败。官方缓存只存可再生依赖与编译状态，不含签名材料；恢复/保存故障不阻塞。每轮现场归target/test或target/build的唯一目录，缓存原子领取且不等待，取消等待本轮进程组退出后清理；无法确认退出则保留现场并明确失败。
 
-产品命令：node scripts/build.mjs test <平台>、build <平台>、candidate <平台>、automate <平台>、cleanup <平台>。自动化按准确main提交和平台Workflow执行，派发前检查活动Run，官方派发回执直接提供Run ID；不确定不补发。恢复只连接原Run，cleanup可在不重跑业务的情况下重试终态收尾。成功版本补丁加一，失败不加。自动化候选版本仅存在本轮派生工程与产物，不回写产品版本和依赖锁。
+产品命令：node scripts/build.mjs test <平台>、build <平台>、candidate <平台>、automate <平台>、cleanup <平台>。自动化按准确main提交和平台Workflow执行，派发前检查活动Run，官方派发回执直接提供Run ID；不确定不补发。控制台恢复只观察原Run，产品cleanup命令独立执行历史收尾。成功版本补丁加一，失败不加。自动化候选版本仅存在本轮派生工程与产物，不回写产品版本和依赖锁。
 
 固定Workflow为产品·平台；Run、Job、Artifact、正式Tag、Release及附件为产品·平台·vX.Y.Z，必要文件扩展名保留。Workflow创建准确源码Tag，正式附件先逐个下载比较再确认正式Release；清理按本产品平台最新成功和非成功终态各留一条，活动任务保留，删除后回查。淘汰旧成功前必须确认新正式Release/Tag与Artifact；不按界面隐藏代替实际删除。
 
@@ -51,4 +51,4 @@ scripts/config.mjs仅声明产品、工具、平台、配置需求与公开入�
 ESLint与TypeScript无输出检查唯一归test阶段，build阶段仅执行官方Vite生产构建及白皮书交付，不重复静态检查。测试、编译各自独立现场仍分别按原锁npm ci，不新增共享现场或框架。官网缓存只准备npm，不创建Rust、Pub或Gradle目录；工作流缓存键只声明本产品Node与npm锁，清理只处理本轮现场，不处理钱包钥匙串或描述文件。现有依赖均有实际用途，本次不删除依赖或改动发布入口。
 
 
-GitHub读取、派发和删除统一使用官网自己的官方REST实现，不依赖控制台PATH中的gh。真实Run终态先交付界面，再实际清理并回查旧Run、日志、Artifact及有准确归属的Release/Tag；最新成功、最新失败各最多一条，活动记录保留。新成功产物保护只阻止旧成功删除，不阻止旧失败清理；清理失败明确报清理未完成，独立cleanup不重跑测试、编译或自动化。现有配置、发布入口和业务保持。
+GitHub历史清理由本产品现有编译工作流末尾的always步骤调用scripts/build.mjs cleanup执行，使用本仓GITHUB_TOKEN及已有contents: write、actions: write权限；控制台只派发和观察原Run，独立CLI automate同样派发后返回准确Run ID，不在客户端轮询或删除GitHub对象。客户端不再公开直接执行GitHub删除的cleanup动作；独立cleanup命令保留在产品内。控制台数据库记录仍归控制台管理。清理先核验本轮仓库、main、工作流、提交及attempt，以收尾前job.status独立计算本轮候选类别并保护本轮；不修改API返回的status或conclusion，Run最终结果由GitHub确认。每个平台最新成功与最新失败各最多保留一条，其他活动Run保留；仅删除已结束旧Run及其准确归属的Tag、Release、日志和Artifact并回查。替代正式产物未验真时保留旧成功，不阻止旧失败清理；权限、网络、删除或回查失败均真实失败，不吞错、不冒充清理完成、不取消另一平台。配置、发布文件、业务、依赖及控制台不变，不新增文件、Job、工作流或框架。
