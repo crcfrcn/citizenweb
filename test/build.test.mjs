@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,mkdirSync,cpSync,readFileSync,rmSync,existsSync,readdirSync,writeFileSync,chmodSync} from 'node:fs';
 import {join} from 'node:path';
 import {root,automationDisplayName,nextVersion,retainedRuns,candidate,automate,cleanupRuns,run} from '../scripts/build.mjs';
-import {initialVersion,platforms,repository} from '../scripts/config.mjs';
+import {initialVersion,platforms,repository} from '../scripts/build.mjs';
 const platform=Object.keys(platforms)[0];
 const row=(id,conclusion,status='completed')=>({id,status,conclusion,updated_at:new Date(id*1000).toISOString(),head_sha:'a'.repeat(40),path:'.github/workflows/'+platform+'.yml',head_branch:'main',run_attempt:1,display_title:automationDisplayName(platform,'1.2.3')});
 test('配置仅声明和引用，导入不派发、不生成现场',async()=>{
  const config=await import('../scripts/config.mjs');assert.equal(config.describeConfiguration().schema,1);
  const source=readFileSync(join(root,'scripts/config.mjs'),'utf8');assert.doesNotMatch(source,/\b(?:spawn|execFile|fetch|dispatch|readFile|writeFile|nextVersion|cleanupRuns)\s*\(/u);
  assert.equal(Object.hasOwn(config.describeConfiguration().configuration.items[0]||{},'value'),false);
+ assert.deepEqual(Object.keys(config).sort(),['describeConfiguration','manifest']);
 });
 test('准确名称和版本边界',()=>{
  assert.match(automationDisplayName(platform,'1.2.3'),/·v1\.2\.3$/u);

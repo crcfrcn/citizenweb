@@ -4,11 +4,11 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,symlinkSync} fro
 import {execFileSync} from 'node:child_process';
 import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {inspectPackage,releaseNames,preparePublication,publishPages,deployPages} from '../scripts/publish.mjs';
+import {inspectPackage,releaseNames,preparePublication,preparePublish,publishPages,deployPages} from '../scripts/publish.mjs';
 import {createHash} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {mkdir,mkdtemp,realpath,rm,writeFile} from 'node:fs/promises';
-import {repository} from '../scripts/config.mjs';
+const repository='crcfrcn/citizenweb';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 test('正式外部附件统一准确产品、平台和版本',()=>{
@@ -134,3 +134,15 @@ const stable=value=>Array.isArray(value)?`[${value.map(stable).join(',')}]`:valu
  });
 
 
+
+
+// 官网发布准备只读成功包与当前生产状态，不调用编译、上传或改变生产轨道。
+test('发布文件独立准备同一正式候选和前一生产部署，错误状态明确失败',async()=>{
+ const source=fixture(),credentials={account:'1'.repeat(32),token:'synthetic-pages-credential'};
+ const previous={id:'00000000-0000-4000-8000-000000000001',project_name:'citizenweb',environment:'production',latest_stage:{status:'success'}};
+ let calls=0;
+ const request=async(url,options)=>{calls++;assert.equal(options.method,'GET');assert.equal(options.headers.Authorization,'Bearer '+credentials.token);assert.ok(url.endsWith('/pages/projects/citizenweb/deployments?env=production&per_page=1'));return Response.json({success:true,result:[previous]});};
+ const ready=await preparePublish({credentials,request,publicationRequest:source.request});assert.equal(ready.proof.run_id,42);assert.equal(ready.previousID,previous.id);assert.equal(calls,1);assert.equal(Object.hasOwn(ready,'credentials'),false);
+ for(const invalid of [{environment:'preview'},{project_name:'other'},{id:'invalid'},{latest_stage:{status:'failure'}}])await assert.rejects(preparePublish({credentials,publicationRequest:source.request,request:async()=>Response.json({success:true,result:[{...previous,...invalid}]})}),/生产部署/u);
+ await assert.rejects(preparePublish({credentials,publicationRequest:source.request,request:async()=>new Response(null,{status:403})}),/HTTP 403/u);
+});

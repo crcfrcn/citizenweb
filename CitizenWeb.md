@@ -26,7 +26,7 @@ CitizenWeb 涉及聊天时只作为依赖使用方；本条不代表尚未接入
 
 ## 当前编译与自动化合同
 
-scripts/config.mjs仅声明产品、工具、平台、配置需求与公开入口引用；不计算版本、不访问GitHub、不启动进程、不生成文件。scripts/build.mjs拥有本产品入口，独立CLI与控制台调用同一实现；导入不执行命令。控制台不拥有产品依赖或流程，不导入其私有宿主模块。
+scripts/config.mjs仅声明控制台所需的CF_ACCOUNT_ID、PAGES_DEPLOY和COLD_SIGNER_PUBLIC_KEY配置需求；不计算版本、不访问GitHub、不启动进程、不生成文件。scripts/build.mjs拥有本产品入口，独立CLI与控制台调用同一实现；导入不执行命令。控制台不拥有产品依赖或流程，不导入其私有宿主模块。
 
 本机与GitHub均沿原始依赖锁执行，缺缓存按原锁正常取得；真实下载、测试、编译、签名或验收失败必须失败。官方缓存只存可再生依赖与编译状态，不含签名材料；恢复/保存故障不阻塞。每轮现场归target/test或target/build的唯一目录，缓存原子领取且不等待，取消等待本轮进程组退出后清理；无法确认退出则保留现场并明确失败。
 
@@ -38,11 +38,11 @@ scripts/config.mjs仅声明产品、工具、平台、配置需求与公开入�
 
 官网平台为web，已核实旧正式版本1.0.11的后续首个候选为1.0.12；后续按准确成功Run递增。Node保持25.2.1，npm按package-lock.json执行npm ci，ESLint、TypeScript、Vite与Wrangler沿本仓原锁。Vite配置只声明官方React/Tailwind插件和默认参数，白皮书正文及内嵌图片的whitepaper/content.json交付归build入口；开发服务使用Vite官方createServer与调用方HTTPS证书，缺件失败且不降级HTTP。
 
-正式外部附件使用ASCII物理文件名citizenweb-web-vX.Y.Z.tgz、.json、.sha256，避免GitHub规范化中文文件名；中文显示标签沿GitHub官方file#label语法设置为公民官网·Web·vX.Y.Z及对应扩展名。scripts/config.mjs只声明两种前缀和附件后缀，构建负责生成，发布只按同一声明读取；归档内部保留dist、版本标记、package.json、package-lock.json及发布清单/摘要。使用系统tar归档、列出与解包，拒绝越界、重复、链接、特殊成员及超限内容，不手写tar格式编解码。scripts/publish.mjs沿同一正式包验真和Pages官方Wrangler上传接口；自动化不调用发布、上传或部署。现有发布回归及合成正式包夹具全部归test/release.test.mjs；test/build.test.mjs覆盖构建及职责边界。
+正式外部附件使用ASCII物理文件名citizenweb-web-vX.Y.Z.tgz、.json、.sha256，避免GitHub规范化中文文件名；中文显示标签沿GitHub官方file#label语法设置为公民官网·Web·vX.Y.Z及对应扩展名。构建入口负责生成，发布入口按公开正式附件格式独立读取；归档内部保留dist、版本标记、package.json、package-lock.json及发布清单/摘要。使用系统tar归档、列出与解包，拒绝越界、重复、链接、特殊成员及超限内容，不手写tar格式编解码。scripts/publish.mjs沿同一正式包验真和Pages官方Wrangler上传接口；自动化不调用发布、上传或部署。现有发布回归及合成正式包夹具全部归test/release.test.mjs；test/build.test.mjs覆盖构建及职责边界。
 
 历史正式资产先删除已验真Tag，再删除其Release；中断重试沿原回执清理，不重新执行编译或派发。test/build.test.mjs覆盖该失败边界。
 
-编译、归档创建及构建产物回读只归scripts/build.mjs，构建不导入或调用scripts/publish.mjs。发布文件只读取声明、核验/解包已存在的正式包及执行获准部署，不创建编译产物、不生成测试夹具、不登记测试。正式产物前缀和附件后缀只在scripts/config.mjs声明，配置不承担命名计算或流程执行。原损坏归档错误类别断言保留，未在本次职责调整中放宽。
+编译、归档创建及构建产物回读只归scripts/build.mjs，构建不导入或调用scripts/publish.mjs。发布文件只读取声明、核验/解包已存在的正式包及执行获准部署，不创建编译产物、不生成测试夹具、不登记测试。构建参数归build.mjs；发布规则归publish.mjs，配置不承担动作转发、命名计算或流程执行。原损坏归档错误类别断言保留，未在本次职责调整中放宽。
 
 已有正式归档的读取、格式识别或解包工具失败沿用“正式归档解压失败”错误类别；路径、重复成员、链接、类型及大小约束仍独立校验。test/release.test.mjs中的原解压失败断言保持不变，不放宽检查来消除失败。该逻辑只处理发布前读取已有正式包，不参与编译或归档创建。
 工具退出回执先保留原工具失败及诊断，再以系统ps只读获取PID/PGID表；只在有效快照包含调用进程、且本轮进程组已空时允许收尾。查询错误、无效或不完整快照、后代未退出均明确失败并附本轮PID/PGID、保留现场。现有Node内置Mock回归保留原失败/EPERM/留场断言，另验证无效快照和真实同组后代完成，不新增框架、接口或控制台改动。
@@ -52,3 +52,7 @@ ESLint与TypeScript无输出检查唯一归test阶段，build阶段仅执行官�
 
 
 GitHub历史清理由本产品现有编译工作流末尾的always步骤调用scripts/build.mjs cleanup执行，使用本仓GITHUB_TOKEN及已有contents: write、actions: write权限；控制台只派发和观察原Run，独立CLI automate同样派发后返回准确Run ID，不在客户端轮询或删除GitHub对象。客户端不再公开直接执行GitHub删除的cleanup动作；独立cleanup命令保留在产品内。控制台数据库记录仍归控制台管理。清理先核验本轮仓库、main、工作流、提交及attempt，以收尾前job.status独立计算本轮候选类别并保护本轮；不修改API返回的status或conclusion，Run最终结果由GitHub确认。历史清理查询覆盖本平台main工作流全部触发事件并逐页读取，包含旧push记录，并通过GitHub官方Workflow ID 374175565读取退役tatagate.yml历史；逐项核对对应路径、main及仓库归属，统一保留规则，不恢复旧工作流执行入口。GitHub删除最后一条历史后会移除退役Workflow，仅该已核实ID的HTTP 404按无历史记录处理，覆盖初始查询及删除后复查；现行Workflow的404、鉴权错误和其它HTTP错误仍明确失败；候选版本及正式包选择仍只查询workflow_dispatch，保持原版本与安装合同。每个平台最新成功与最新失败各最多保留一条，其他活动Run保留；仅删除已结束旧Run及其准确归属的Tag、Release、日志和Artifact并回查。替代正式产物未验真时保留旧成功，不阻止旧失败清理；权限、网络、删除或回查失败均真实失败，不吞错、不冒充清理完成、不取消另一平台。业务、依赖及控制台保持，不新增文件、Job、工作流或框架。
+
+控制台测试、编译与塔塔自动化直接调用build.mjs；发布直接调用publish.mjs的prepare/publish命令。prepare只验真已有成功包并读取当前生产部署，原生冷签批准后publish才消费同一proof及previousID，通过官方Wrangler部署并回读；配置文件不转导出动作，发布不调用编译。
+
+发布冷签准备返回同一正式proof与当前previousID，两个字段都在原生批准及执行时复核。发布CLI只接收原生私有标准输入；Node沿本产品package.json声明复用已有安装及随附npm，发布现场依旧归本产品target/publish。本产品构建入口不导入发布入口，配置不导出describeAction。

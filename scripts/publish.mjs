@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // 官网发布独立核验成功自动化的正式资产，拥有Pages上传与部署回读；不创建Tag或Release。
 import {createHash} from 'node:crypto';
-import {artifactPrefix,artifactFilePrefix,artifactSuffixes} from './config.mjs';
 import {spawn,execFileSync} from 'node:child_process';
 import {mkdirSync,mkdtempSync,writeFileSync,readFileSync,rmSync,readdirSync,lstatSync} from 'node:fs';
 import {mkdir,mkdtemp,rm,writeFile,realpath,lstat,readFile} from 'node:fs/promises';
@@ -9,6 +8,8 @@ import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const repository='crcfrcn/citizenweb',workflow='.github/workflows/web.yml';
+// 正式附件是产品公开交付格式；发布独立读取，不导入编译入口或配置执行函数。
+const artifactPrefix='公民官网·Web·v',artifactFilePrefix='citizenweb-web-v',artifactSuffixes=['tgz','json','sha256'];
 // 只按声明读取同一正式版本的附件名称，不创建产物。
 function publicationName(version){if(typeof version!=='string'||version.length>64||!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(version))fail('正式版本无效');return artifactPrefix+version;}
 export function releaseNames(version){publicationName(version);return artifactSuffixes.map(suffix=>artifactFilePrefix+version+'.'+suffix);}
@@ -124,6 +125,15 @@ async function selectedPublication(request,includeContents=false){
   readAsset:async asset=>(await request(asset.url,{raw:true}))?.body,includeContents});
 }
 export async function preparePublication({request=publicRequest}={}){return selectedPublication(request);}
+
+// 冷签准备只读取成功候选与当前生产部署；凭据仅由原生私有输入管道交付。
+export async function preparePublish({credentials,request=fetch,publicationRequest=publicRequest,signal}={}){
+ const proof=await preparePublication({request:publicationRequest}),{account,token}=deploymentCredentials(credentials);
+ const previous=(await cloudflareJSON(account,token,'pages/projects/citizenweb/deployments?env=production&per_page=1',{request,signal}))?.[0];
+ if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu.test(previous?.id||'')
+  ||previous.project_name!=='citizenweb'||previous.environment!=='production'||previous.latest_stage?.status!=='success')fail('Pages当前生产部署未确认');
+ return {proof,previousID:previous.id};
+}
 
 // 正式发布重新读取并验真同一个 Release；只在本轮独占目录物化经过清单约束的成员。
 
@@ -282,10 +292,10 @@ if(direct&&!process.env.NODE_TEST_CONTEXT){
  const controller=new AbortController();for(const name of ['SIGTERM','SIGINT'])process.once(name,()=>controller.abort(Error('发布已取消')));
  void (async()=>{
   if(process.argv.length!==3||!['prepare','publish','deploy'].includes(process.argv[2]))fail('发布入口参数无效');
-  if(process.argv[2]==='prepare')return preparePublication();
   let text='';for await(const chunk of process.stdin){text+=chunk;if(Buffer.byteLength(text)>1024**2)fail('发布输入超限');}
   let value;try{value=JSON.parse(text);}catch{fail('发布输入JSON无效');}
   if(!value||typeof value!=='object'||Array.isArray(value))fail('发布输入无效');
+  if(process.argv[2]==='prepare')return preparePublish({...value,signal:controller.signal});
   if(process.argv[2]==='deploy')return deployPages(value.payload,value.credentials,{signal:controller.signal});
   return publishPages({...value,signal:controller.signal});
  })().then(value=>process.stdout.write(JSON.stringify(value)+'\n')).catch(error=>{console.error(error.message);process.exitCode=1;});

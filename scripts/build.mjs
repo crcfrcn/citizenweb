@@ -5,7 +5,12 @@ import {mkdirSync,mkdtempSync,readFileSync,writeFileSync,copyFileSync,cpSync,rmS
 import {join,dirname,resolve,relative,sep,basename} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
-import {tools,repository,platforms,initialVersion,artifactPrefix,artifactFilePrefix} from './config.mjs';
+// 构建与自动化的参数归本执行入口；配置文件只声明控制台所需配置项。
+export const repository='crcfrcn/citizenweb';
+export const tools=Object.freeze({node:JSON.parse(readFileSync(new URL('../package.json',import.meta.url))).engines.node});
+export const platforms=Object.freeze({web:'Web'});
+export const initialVersion='1.0.12';
+const artifactPrefix='公民官网·Web·v',artifactFilePrefix='citizenweb-web-v';
 export const root=fileURLToPath(new URL('../',import.meta.url));
 const controller=new AbortController();
 export function automationDisplayName(platform,version){
