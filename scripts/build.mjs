@@ -99,7 +99,13 @@ async function rowsFor(platform,read,allEvents=false){
  // 退役工作流仅按已核实的官方ID读取历史；不恢复执行入口，版本只看现行工作流。
  const workflows=[[platform+'.yml','.github/workflows/'+platform+'.yml'],...(allEvents?[[374175565,'.github/workflows/tatagate.yml']]:[])];
  for(const [id,path]of workflows)for(let page=1;;page++){
-  const result=await read('actions/workflows/'+id+'/runs?branch=main&'+(allEvents?'':'event=workflow_dispatch&')+'per_page=100&page='+page);
+  let result;
+  try{result=await read('actions/workflows/'+id+'/runs?branch=main&'+(allEvents?'':'event=workflow_dispatch&')+'per_page=100&page='+page);}
+  catch(error){
+   // 最后一条历史删除后GitHub移除退役Workflow；仅此ID的404表示已无记录。
+   if(id===374175565&&error.status===404)break;
+   throw error;
+  }
   if(!Array.isArray(result.workflow_runs))throw Error('GitHub Run列表无效');
   if(allEvents&&result.workflow_runs.some(row=>row.path!==path||row.head_branch!=='main'||(row.repository?.full_name&&row.repository.full_name!==repository)))throw Error('清理Run归属不符');
   rows.push(...result.workflow_runs);if(result.workflow_runs.length<100)break;

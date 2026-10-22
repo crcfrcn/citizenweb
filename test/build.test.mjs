@@ -281,3 +281,27 @@ test('退役tatagate历史与现行Web合并清理，候选版本不读取退役
   let removed=0;await assert.rejects(cleanupRuns(platform,{read:async path=>({workflow_runs:path.startsWith('actions/workflows/374175565/')?[{...legacy(1,'failure'),...invalid}]:[]}),remove:async()=>{removed++;}}),/归属不符/u);assert.equal(removed,0);
  }
 });
+
+
+// GitHub在退役Workflow最后一条Run删除后返回404，初始已空和删除后复查均需收口。
+test('仅退役工作流404视为无记录，现行404及其它HTTP错误仍失败',async()=>{
+ for(const empty of [true,false]){
+  let oldExists=!empty;const old={...row(1,'failure'),path:'.github/workflows/tatagate.yml'},latest=row(2,'failure'),deleted=[];
+  const missing=()=>{throw Object.assign(Error('GitHub HTTP 404'),{status:404});};
+  const read=async path=>{
+   if(path.startsWith('actions/workflows/web.yml/'))return {workflow_runs:[latest]};
+   if(path.startsWith('actions/workflows/374175565/'))return oldExists?{workflow_runs:[old]}:missing();
+   if(path.startsWith('releases?'))return [];
+   if(path==='actions/runs/1'&&oldExists)return old;
+   return missing();
+  };
+  const result=await cleanupRuns(platform,{read,remove:async path=>{assert.equal(path,'actions/runs/1');deleted.push(path);oldExists=false;}});
+  assert.equal(result.completed,true);assert.deepEqual(result.kept,[2]);assert.deepEqual(deleted,empty?[]:['actions/runs/1']);
+ }
+ for(const [id,status]of [['web.yml',404],[374175565,401],[374175565,403],[374175565,500]]){
+  let deleted=0;await assert.rejects(cleanupRuns(platform,{read:async path=>{
+   if(path.startsWith('actions/workflows/'+id+'/'))throw Object.assign(Error('GitHub HTTP '+status),{status});
+   return {workflow_runs:[row(2,'failure')]};
+  },remove:async()=>{deleted++;}}),error=>error.status===status);assert.equal(deleted,0);
+ }
+});
