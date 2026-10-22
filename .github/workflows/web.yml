@@ -100,7 +100,9 @@ jobs:
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$name" -f "sha=$GITHUB_SHA" > "$PRODUCT_WORK/tag.json"
           created_tag=1
           assets=("$PRODUCT_WORK"/artifact/*)
-          gh release create "$name" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$name" --notes-file "$PRODUCT_WORK/notes.md"
+          uploads=()
+          for file in "${assets[@]}"; do uploads+=("$file#$name.${file##*.}"); done
+          gh release create "$name" "${uploads[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --verify-tag --draft --title "$name" --notes-file "$PRODUCT_WORK/notes.md"
           mkdir "$PRODUCT_WORK/readback"
           gh release download "$name" --repo "$GITHUB_REPOSITORY" --dir "$PRODUCT_WORK/readback"
           for file in "${assets[@]}"; do cmp "$file" "$PRODUCT_WORK/readback/$(basename "$file")"; done

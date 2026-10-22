@@ -12,7 +12,7 @@ import {repository} from '../scripts/config.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 test('正式外部附件统一准确产品、平台和版本',()=>{
- assert.deepEqual(releaseNames('1.0.12'),['公民官网·Web·v1.0.12.tgz','公民官网·Web·v1.0.12.json','公民官网·Web·v1.0.12.sha256']);assert.throws(()=>releaseNames('1.0.12\n'));
+ assert.deepEqual(releaseNames('1.0.12'),['citizenweb-web-v1.0.12.tgz','citizenweb-web-v1.0.12.json','citizenweb-web-v1.0.12.sha256']);assert.throws(()=>releaseNames('1.0.12\n'));
 });
 test('官方tar解包拒绝链接和父目录成员',t=>{
  const parent=join(root,'target/test');mkdirSync(parent,{recursive:true});const work=mkdtempSync(join(parent,'archive-'));t.after(()=>rmSync(work,{recursive:true,force:true}));
@@ -53,6 +53,7 @@ const stable=value=>Array.isArray(value)?`[${value.map(stable).join(',')}]`:valu
  }
  test('成功Web自动化的三件正式资产与全部归档成员独立验真',async()=>{
   const value=await preparePublication({request:fixture().request});assert.equal(value.archive_files,8);assert.equal(value.assets.length,3);assert.equal(value.version,'1.0.0');
+  assert.equal(value.tag,'公民官网·Web·v1.0.0');assert.deepEqual(value.assets.map(asset=>asset.name),names);
  });
  test('归档缺失、来源错配与重复成功Run均拒绝',async()=>{
   assert.throws(()=>inspectPackage(Buffer.from('not-gzip'),Buffer.from('{}'),Buffer.from(''),'1.0.0','a'.repeat(40)),/解压失败/u);

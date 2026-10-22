@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,cpSync,readFileSync,rmSync,existsSync,readdirSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,cpSync,readFileSync,rmSync,existsSync,readdirSync,writeFileSync,chmodSync} from 'node:fs';
 import {join} from 'node:path';
 import {root,automationDisplayName,nextVersion,retainedRuns,candidate,automate,cleanupRuns,run} from '../scripts/build.mjs';
 import {initialVersion,platforms,repository} from '../scripts/config.mjs';
@@ -33,14 +33,14 @@ test('派发回执不确定只请求一次',async()=>{
 test('旧失败删除后回查，不碰活动和另一类最新记录',async()=>{
  let rows=[row(1,'failure'),row(2,'failure'),row(3,null,'in_progress')];const deleted=[];
  const read=async path=>{
-  if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};if(path.startsWith('releases?'))return [];
+  if(path.startsWith('actions/workflows/374175565/'))return {workflow_runs:[]};if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};if(path.startsWith('releases?'))return [];
   const value=rows.find(row=>path==='actions/runs/'+row.id);if(value)return value;throw Object.assign(Error('HTTP 404'),{status:404});
  };
  const result=await cleanupRuns(platform,{read,remove:async path=>{deleted.push(path);rows=rows.filter(row=>path!=='actions/runs/'+row.id);}});
  assert.equal(result.completed,true);assert.deepEqual(deleted,['actions/runs/1']);assert.deepEqual(rows.map(row=>row.id),[2,3]);
 });
 test('新成功资产未确认时保留旧成功',async()=>{
- let deleted=0;const rows=[row(1,'success'),row(2,'success')];await assert.rejects(cleanupRuns(platform,{read:async path=>path.startsWith('releases?')?[]:{workflow_runs:rows},remove:async()=>{deleted++;}}),/保留旧成功/u);assert.equal(deleted,0);
+ let deleted=0;const rows=[row(1,'success'),row(2,'success')];await assert.rejects(cleanupRuns(platform,{read:async path=>path.startsWith('actions/workflows/374175565/')?{workflow_runs:[]}:path.startsWith('releases?')?[]:{workflow_runs:rows},remove:async()=>{deleted++;}}),/保留旧成功/u);assert.equal(deleted,0);
 });
 test('真实子进程非零退出和取消均失败',async()=>{
  await assert.rejects(run(process.execPath,['-e','process.exit(7)']),/执行失败/u);
@@ -71,7 +71,7 @@ test('删除Tag后Release失败，重试仍清理原Release与Run',async()=>{
  const old=row(1,'failure'),fresh=row(2,'failure');let rows=[old,fresh],tag=true,release=true,failOnce=true;
  const proof={run_id:1,platform},record={id:10,tag_name:old.display_title,target_commitish:old.head_sha,body:'<!-- automation:'+JSON.stringify(proof)+' -->'};
  const missing=()=>{throw Object.assign(Error('HTTP 404'),{status:404});};
- const read=async path=>{if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};if(path.startsWith('releases?'))return release?[record]:[];if(path==='releases/10')return release?record:missing();if(path.startsWith('git/ref/tags/'))return tag?{object:{type:'commit',sha:old.head_sha}}:missing();return rows.find(value=>path==='actions/runs/'+value.id)||missing();};
+ const read=async path=>{if(path.startsWith('actions/workflows/374175565/'))return {workflow_runs:[]};if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};if(path.startsWith('releases?'))return release?[record]:[];if(path==='releases/10')return release?record:missing();if(path.startsWith('git/ref/tags/'))return tag?{object:{type:'commit',sha:old.head_sha}}:missing();return rows.find(value=>path==='actions/runs/'+value.id)||missing();};
  const remove=async path=>{if(path.startsWith('git/refs/tags/'))tag=false;else if(path==='releases/10'){if(failOnce){failOnce=false;throw Error('HTTP 503');}release=false;}else if(path==='actions/runs/1')rows=rows.filter(value=>value.id!==1);};
  await assert.rejects(cleanupRuns(platform,{read,remove}),/503/u);assert.equal(tag,false);assert.equal(release,true);assert.equal(rows.length,2);
  assert.deepEqual((await cleanupRuns(platform,{read,remove})).deleted,[1]);assert.equal(release,false);
@@ -121,13 +121,13 @@ test('GitHub REST保留方法、令牌及HTTP状态，不启动命令',async()=>
 });
 test('新成功尚未验真不阻挡旧失败实际删除',async()=>{
  let rows=[row(1,'success'),row(2,'failure'),row(3,'success'),row(4,'failure')];const deleted=[];
- const read=async path=>{if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};if(path.startsWith('releases?'))return [];const value=rows.find(value=>path==='actions/runs/'+value.id);if(value)return value;throw Object.assign(Error('HTTP 404'),{status:404});};
+ const read=async path=>{if(path.startsWith('actions/workflows/374175565/'))return {workflow_runs:[]};if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};if(path.startsWith('releases?'))return [];const value=rows.find(value=>path==='actions/runs/'+value.id);if(value)return value;throw Object.assign(Error('HTTP 404'),{status:404});};
  await assert.rejects(cleanupRuns(platform,{read,remove:async path=>{deleted.push(path);rows=rows.filter(value=>path!=='actions/runs/'+value.id);}}),/保留旧成功/u);
  assert.deepEqual(deleted,['actions/runs/2']);assert.deepEqual(rows.map(value=>value.id),[1,3,4]);
 });
 test('删除后仍存在必须明确清理失败',async()=>{
  const rows=[row(1,'failure'),row(2,'failure')];
- await assert.rejects(cleanupRuns(platform,{read:async path=>path.startsWith('actions/workflows/')?{workflow_runs:rows}:path.startsWith('releases?')?[]:rows[0],remove:async()=>{}}),/旧Run删除未确认/u);
+ await assert.rejects(cleanupRuns(platform,{read:async path=>path.startsWith('actions/workflows/374175565/')?{workflow_runs:[]}:path.startsWith('actions/workflows/')?{workflow_runs:rows}:path.startsWith('releases?')?[]:rows[0],remove:async()=>{}}),/旧Run删除未确认/u);
 });
 // 客户端只派发，工作流自己执行GitHub删除，不向控制台索取清理权限。
 test('自动化派发后返回准确Run且不轮询或清理GitHub',async()=>{
@@ -154,7 +154,7 @@ test('工作流按真实Job结果保留本轮和活动Run，不改写Run终态',
   const release={id:10,tag_name:current.display_title,draft:false,prerelease:false,assets:Array.from({length:target==='android'?4:3},()=>({})),body:'<!-- automation:'+JSON.stringify({run_id:3,platform:target})+' -->'};
   const missing=()=>{throw Object.assign(Error('HTTP 404'),{status:404});};
   const read=async path=>{
-   if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};
+   if(path.startsWith('actions/workflows/374175565/'))return {workflow_runs:[]};if(path.startsWith('actions/workflows/'))return {workflow_runs:rows};
    if(path==='actions/runs/3')return current;
    if(path.startsWith('releases?'))return result==='success'?[release]:[];
    if(path.startsWith('git/ref/tags/'))return {object:{type:'commit',sha:current.head_sha}};
@@ -170,13 +170,13 @@ test('工作流按真实Job结果保留本轮和活动Run，不改写Run终态',
 test('本轮输入、仓库、分支、平台、提交及attempt不符均禁止删除',async()=>{
  const current={...row(3,null,'in_progress'),repository:{full_name:repository},event:'workflow_dispatch'};
  for(const invalid of [{id:99},{repository:{full_name:'other/repo'}},{head_branch:'other'},{path:'.github/workflows/other.yml'},{event:'push'},{head_sha:'b'.repeat(40)},{run_attempt:2}]){
-  let deleted=0;await assert.rejects(cleanupRuns(platform,{currentRun:3,result:'success',sourceSha:current.head_sha,attempt:1,read:async path=>path.startsWith('actions/workflows/')?{workflow_runs:[]}:{...current,...invalid},remove:async()=>{deleted++;}}),/身份不符/u);assert.equal(deleted,0);
+  let deleted=0;await assert.rejects(cleanupRuns(platform,{currentRun:3,result:'success',sourceSha:current.head_sha,attempt:1,read:async path=>path.startsWith('actions/workflows/374175565/')?{workflow_runs:[]}:path.startsWith('actions/workflows/')?{workflow_runs:[]}:{...current,...invalid},remove:async()=>{deleted++;}}),/身份不符/u);assert.equal(deleted,0);
  }
  for(const [currentRun,result]of [[-1,'success'],[3,'unknown'],[0,'failure']])await assert.rejects(cleanupRuns(platform,{currentRun,result,read:async()=>({workflow_runs:[]})}),/输入无效/u);
 });
 test('清理权限失败真实抛出，不改写本轮状态或触发编译派发',async()=>{
  const current={...row(3,null,'in_progress'),repository:{full_name:repository},event:'workflow_dispatch'},previous=row(1,'failure');
- const read=async path=>path.startsWith('actions/workflows/')?{workflow_runs:[previous]}:path.startsWith('releases?')?[]:path==='actions/runs/3'?current:previous;
+ const read=async path=>path.startsWith('actions/workflows/374175565/')?{workflow_runs:[]}:path.startsWith('actions/workflows/')?{workflow_runs:[previous]}:path.startsWith('releases?')?[]:path==='actions/runs/3'?current:previous;
  let calls=0;await assert.rejects(cleanupRuns(platform,{read,currentRun:3,result:'failure',remove:async path=>{calls++;assert.equal(path,'actions/runs/1');throw Object.assign(Error('HTTP 403'),{status:403});}}),/HTTP 403/u);
  assert.equal(calls,1);assert.equal(current.status,'in_progress');assert.equal(current.conclusion,null);
 });
@@ -188,7 +188,7 @@ test('清理覆盖旧push及分页，候选仍只查派发，活动记录全部�
   let rows=[make(1,'failure','push'),make(2,'success'),make(3,'failure'),make(4,null,'push','in_progress')];const deleted=[],queries=[];
   const missing=()=>{throw Object.assign(Error('HTTP 404'),{status:404});};
   const read=async path=>{
-   if(path.startsWith('actions/workflows/')){
+   if(path.startsWith('actions/workflows/374175565/'))return {workflow_runs:[]};if(path.startsWith('actions/workflows/')){
     queries.push(path);const url=new URL('https://api.github.com/'+path);assert.equal(url.searchParams.get('branch'),'main');
     if(url.searchParams.has('event')){assert.equal(url.searchParams.get('event'),'workflow_dispatch');return {workflow_runs:[]};}
     const legacy=Array.from({length:100},(_,index)=>({...make(100+index,'failure','push'),updated_at:new Date(0).toISOString()})).filter(row=>!deleted.includes('actions/runs/'+row.id));
@@ -206,5 +206,78 @@ test('清理覆盖旧push及分页，候选仍只查派发，活动记录全部�
 test('清理拒绝其他仓库、平台或分支记录，不删除归属不符对象',async()=>{
  for(const invalid of [{path:'.github/workflows/other.yml'},{head_branch:'other'},{repository:{full_name:'other/repo'}}]){
   let deleted=0;await assert.rejects(cleanupRuns(platform,{read:async()=>({workflow_runs:[{...row(1,'failure'),...invalid}]}),remove:async()=>{deleted++;}}),/归属不符/u);assert.equal(deleted,0);
+ }
+});
+
+
+// 执行工作流原脚本与真实归档入口；gh只模拟本轮远端回执，所有文件归产品target现场。
+test('ASCII正式附件与中文标签逐件回读，附件损坏和SHA错配均失败并撤回本轮候选',async t=>{
+ const workflow=readFileSync(join(root,'.github/workflows/web.yml'),'utf8');
+ const block=workflow.split('      - name: 创建正式Tag和Release并逐件回读\n')[1].split('      - name: 保存官方缓存\n')[0];
+ const script=block.slice(block.indexOf('        run: |\n')+'        run: |\n'.length).split('\n').map(line=>line.startsWith('          ')?line.slice(10):line).join('\n');
+ for(const mode of ['success','missing','corrupt','target','tag']){
+  const parent=join(root,'target/test');mkdirSync(parent,{recursive:true});const work=mkdtempSync(join(parent,'release-readback-'));t.after(()=>rmSync(work,{recursive:true,force:true}));
+  mkdirSync(join(work,'source-view'));mkdirSync(join(work,'dist'));
+  writeFileSync(join(work,'source-view/package.json'),JSON.stringify({version:'0.0.0',devDependencies:{vite:'8',wrangler:'4'}}));
+  writeFileSync(join(work,'source-view/package-lock.json'),JSON.stringify({version:'0.0.0',packages:{'':{version:'0.0.0'}}}));
+  writeFileSync(join(work,'dist/index.html'),'<html>synthetic</html>');
+  const env={PRODUCT_WORK:work,PRODUCT_VERSION:'1.0.12',GITHUB_REPOSITORY:repository,GITHUB_SHA:'a'.repeat(40),GITHUB_RUN_ID:'42',GITHUB_RUN_ATTEMPT:'1',MOCK_MODE:mode};
+  // 子进程走真实CLI；Node测试上下文不应阻止该合成归档入口执行。
+  await run(process.execPath,[join(root,'scripts/build.mjs'),'package','web'],{env:{...env,NODE_TEST_CONTEXT:''},capture:true});
+  assert.deepEqual(readdirSync(join(work,'artifact')).sort(),['citizenweb-web-v1.0.12.json','citizenweb-web-v1.0.12.sha256','citizenweb-web-v1.0.12.tgz']);
+  const state=join(work,'state.json');writeFileSync(state,JSON.stringify({tag:false,deleted:false}));
+  writeFileSync(join(work,'gh'),'#!'+process.execPath+'\n'+String.raw`
+import {readFileSync,writeFileSync,copyFileSync,readdirSync} from 'node:fs';
+import {join,basename} from 'node:path';
+import assert from 'node:assert/strict';
+const args=process.argv.slice(2),env=process.env,file=join(env.PRODUCT_WORK,'state.json'),state=JSON.parse(readFileSync(file));
+const option=name=>args[args.indexOf(name)+1],reply=value=>process.stdout.write(JSON.stringify(value));
+if(args[0]==='api'){
+ if(option('--method')==='POST'){assert.equal(option('-f'),'ref=refs/tags/公民官网·Web·v1.0.12');assert.ok(args.includes('sha='+env.GITHUB_SHA));state.tag=true;reply({});}
+ else if(option('--method')==='DELETE'){state.tag=false;reply({});}
+ else if(args[1].includes('/releases/tags/'))reply(state.release);
+ else if(args[1].includes('/git/ref/tags/'))reply({object:{type:'commit',sha:env.MOCK_MODE==='tag'?'b'.repeat(40):env.GITHUB_SHA}});
+ else throw Error('unexpected API');
+}else if(args[0]==='release'){
+ if(args[1]==='create'){
+  assert.equal(args[2],'公民官网·Web·v1.0.12');
+  const files=args.slice(3,args.indexOf('--repo'));assert.equal(files.length,3);
+  for(const spec of files){const [path,label]=spec.split('#');assert.match(basename(path),/^citizenweb-web-v1\.0\.12\.(?:tgz|json|sha256)$/u);assert.equal(label,args[2]+'.'+path.split('.').at(-1));}
+  state.release={name:args[2],tag_name:args[2],target_commitish:env.MOCK_MODE==='target'?'main':option('--target'),draft:true,prerelease:false,assets:files.map(spec=>({name:basename(spec.split('#')[0]),label:spec.split('#')[1]})),body:readFileSync(option('--notes-file'),'utf8')};
+ }else if(args[1]==='download'){
+  const names=readdirSync(join(env.PRODUCT_WORK,'artifact'));
+  for(const name of names){if(env.MOCK_MODE==='missing'&&name.endsWith('.json'))continue;const path=join(option('--dir'),name);copyFileSync(join(env.PRODUCT_WORK,'artifact',name),path);if(env.MOCK_MODE==='corrupt'&&name.endsWith('.tgz'))writeFileSync(path,'synthetic damage');}
+ }else if(args[1]==='edit'){state.release.draft=false;}
+ else if(args[1]==='view')reply({body:state.release.body});
+ else if(args[1]==='delete'){state.deleted=true;state.tag=false;}
+ else throw Error('unexpected release command');
+}else throw Error('unexpected gh command');
+writeFileSync(file,JSON.stringify(state));
+`);chmodSync(join(work,'gh'),0o700);
+  const execute=()=>run('/bin/bash',['-c',script],{env:{...env,PATH:work+':'+process.env.PATH},capture:true});
+  if(mode==='success')await execute();else await assert.rejects(execute());
+  const result=JSON.parse(readFileSync(state));assert.equal(result.deleted,mode!=='success');assert.equal(result.tag,mode==='success');
+  if(mode==='success'){assert.equal(result.release.target_commitish,env.GITHUB_SHA);assert.equal(result.release.draft,false);}
+ }
+});
+
+// 同一官网平台的退役记录参与既有保留规则，活动任务仍受保护。
+test('退役tatagate历史与现行Web合并清理，候选版本不读取退役工作流',async()=>{
+ const legacy=(id,conclusion,status='completed')=>({...row(id,conclusion,status),path:'.github/workflows/tatagate.yml',event:'push',repository:{full_name:repository}});
+ const current={...row(5,null,'in_progress'),event:'workflow_dispatch',repository:{full_name:repository}};
+ let rows=[legacy(1,'success'),legacy(2,'failure'),row(3,'success'),row(4,'failure'),legacy(6,null,'queued')];const deleted=[],queries=[];
+ const record={id:10,tag_name:current.display_title,draft:false,prerelease:false,assets:[{},{},{}],body:'<!-- automation:'+JSON.stringify({run_id:5,platform})+' -->'};
+ const missing=()=>{throw Object.assign(Error('HTTP 404'),{status:404});};
+ const read=async path=>{
+  if(path.startsWith('actions/workflows/')){queries.push(path);const old=path.startsWith('actions/workflows/374175565/');return {workflow_runs:rows.filter(r=>(r.path==='.github/workflows/tatagate.yml')===old)};}
+  if(path.startsWith('releases?'))return [record];if(path.startsWith('git/ref/tags/'))return {object:{type:'commit',sha:current.head_sha}};
+  if(path==='actions/runs/5')return current;if(path==='actions/runs/5/artifacts?per_page=100')return {artifacts:[{name:current.display_title,expired:false,size_in_bytes:1}]};
+  return rows.find(r=>path==='actions/runs/'+r.id)||missing();
+ };
+ const result=await cleanupRuns(platform,{read,remove:async path=>{deleted.push(path);rows=rows.filter(r=>path!=='actions/runs/'+r.id);},currentRun:5,result:'success',sourceSha:current.head_sha,attempt:1});
+ assert.deepEqual([...result.kept].sort(),[4,5,6]);assert.deepEqual(deleted,['actions/runs/3','actions/runs/1','actions/runs/2']);assert.ok(queries.some(path=>path.startsWith('actions/workflows/374175565/')));
+ let reads=0;assert.equal(await candidate(platform,{read:async path=>{reads++;assert.ok(path.startsWith('actions/workflows/web.yml/'));return {workflow_runs:[]};},currentRun:0}),initialVersion);assert.equal(reads,1);
+ for(const invalid of [{path:'.github/workflows/web.yml'},{head_branch:'other'},{repository:{full_name:'other/repo'}}]){
+  let removed=0;await assert.rejects(cleanupRuns(platform,{read:async path=>({workflow_runs:path.startsWith('actions/workflows/374175565/')?[{...legacy(1,'failure'),...invalid}]:[]}),remove:async()=>{removed++;}}),/归属不符/u);assert.equal(removed,0);
  }
 });

@@ -5,7 +5,7 @@ import {mkdirSync,mkdtempSync,readFileSync,writeFileSync,copyFileSync,cpSync,rmS
 import {join,dirname,resolve,relative,sep,basename} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
-import {tools,repository,platforms,initialVersion,artifactPrefix} from './config.mjs';
+import {tools,repository,platforms,initialVersion,artifactPrefix,artifactFilePrefix} from './config.mjs';
 export const root=fileURLToPath(new URL('../',import.meta.url));
 const controller=new AbortController();
 export function automationDisplayName(platform,version){
@@ -96,12 +96,15 @@ export async function github(path,{method='GET',body,token=process.env.GH_TOKEN|
 }
 async function rowsFor(platform,read,allEvents=false){
  automationDisplayName(platform,initialVersion);const rows=[];
- for(let page=1;;page++){
-  const result=await read('actions/workflows/'+platform+'.yml/runs?branch=main&'+(allEvents?'':'event=workflow_dispatch&')+'per_page=100&page='+page);
+ // 退役工作流仅按已核实的官方ID读取历史；不恢复执行入口，版本只看现行工作流。
+ const workflows=[[platform+'.yml','.github/workflows/'+platform+'.yml'],...(allEvents?[[374175565,'.github/workflows/tatagate.yml']]:[])];
+ for(const [id,path]of workflows)for(let page=1;;page++){
+  const result=await read('actions/workflows/'+id+'/runs?branch=main&'+(allEvents?'':'event=workflow_dispatch&')+'per_page=100&page='+page);
   if(!Array.isArray(result.workflow_runs))throw Error('GitHub Run列表无效');
-  if(allEvents&&result.workflow_runs.some(row=>row.path!=='.github/workflows/'+platform+'.yml'||row.head_branch!=='main'||(row.repository?.full_name&&row.repository.full_name!==repository)))throw Error('清理Run归属不符');
-  rows.push(...result.workflow_runs);if(result.workflow_runs.length<100)return rows;
+  if(allEvents&&result.workflow_runs.some(row=>row.path!==path||row.head_branch!=='main'||(row.repository?.full_name&&row.repository.full_name!==repository)))throw Error('清理Run归属不符');
+  rows.push(...result.workflow_runs);if(result.workflow_runs.length<100)break;
  }
+ return rows;
 }
 export async function candidate(platform,{token=process.env.GH_TOKEN,read=path=>github(path,{token}),currentRun=Number(process.env.GITHUB_RUN_ID)}={}){
  const rows=await rowsFor(platform,read);
@@ -216,7 +219,9 @@ export async function buildProduct(){
 const stable=value=>Array.isArray(value)?'['+value.map(stable).join(',')+']':value&&typeof value==='object'?'{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+stable(value[key])).join(',')+'}':JSON.stringify(value);
 export async function packageProduct(){
  const work=process.env.PRODUCT_WORK;if(!insideTarget(work))throw Error('官网正式产物现场无效');
- const version=process.env.PRODUCT_VERSION,title=automationDisplayName('web',version),project=join(work,'source-view'),payload=directory(join(work,'package')),output=directory(join(work,'artifact'));copy(join(work,'dist'),join(payload,'dist'));
+ const version=process.env.PRODUCT_VERSION;automationDisplayName('web',version);
+ // 物理文件使用稳定ASCII名；中文显示名由GitHub官方label承载。
+ const title=artifactFilePrefix+version,project=join(work,'source-view'),payload=directory(join(work,'package')),output=directory(join(work,'artifact'));copy(join(work,'dist'),join(payload,'dist'));
  const pkg=JSON.parse(readFileSync(join(project,'package.json'))),lock=JSON.parse(readFileSync(join(project,'package-lock.json')));pkg.version=version;lock.version=version;lock.packages[''].version=version;
  put(join(payload,'package.json'),JSON.stringify(pkg)+'\n');put(join(payload,'package-lock.json'),JSON.stringify(lock)+'\n');
  const collect=directory=>readdirSync(directory,{withFileTypes:true}).flatMap(entry=>{const path=join(directory,entry.name);if(entry.isSymbolicLink())throw Error('官网产物禁止链接');return entry.isDirectory()?collect(path):[path];});

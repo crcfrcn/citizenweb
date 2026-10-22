@@ -21,5 +21,6 @@ export const tools=Object.freeze({"node": "25.2.1"});
 export const platforms=Object.freeze({"web": "Web"});
 export const initialVersion="1.0.12";
 export const artifactPrefix='公民官网·Web·v';
+export const artifactFilePrefix='citizenweb-web-v';
 export const artifactSuffixes=Object.freeze(['tgz','json','sha256']);
 export {describeAction} from './build.mjs';

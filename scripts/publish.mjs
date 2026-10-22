@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 官网发布独立核验成功自动化的正式资产，拥有Pages上传与部署回读；不创建Tag或Release。
 import {createHash} from 'node:crypto';
-import {artifactPrefix,artifactSuffixes} from './config.mjs';
+import {artifactPrefix,artifactFilePrefix,artifactSuffixes} from './config.mjs';
 import {spawn,execFileSync} from 'node:child_process';
 import {mkdirSync,mkdtempSync,writeFileSync,readFileSync,rmSync,readdirSync,lstatSync} from 'node:fs';
 import {mkdir,mkdtemp,rm,writeFile,realpath,lstat,readFile} from 'node:fs/promises';
@@ -11,7 +11,7 @@ import {fileURLToPath} from 'node:url';
 const repository='crcfrcn/citizenweb',workflow='.github/workflows/web.yml';
 // 只按声明读取同一正式版本的附件名称，不创建产物。
 function publicationName(version){if(typeof version!=='string'||version.length>64||!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(version))fail('正式版本无效');return artifactPrefix+version;}
-export function releaseNames(version){const title=publicationName(version);return artifactSuffixes.map(suffix=>title+'.'+suffix);}
+export function releaseNames(version){publicationName(version);return artifactSuffixes.map(suffix=>artifactFilePrefix+version+'.'+suffix);}
 const sha=value=>typeof value==='string'&&/^[a-f0-9]{64}$/u.test(value);
 const positive=value=>Number.isSafeInteger(value)&&value>0;
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
