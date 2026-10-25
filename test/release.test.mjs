@@ -4,7 +4,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,symlinkSync} fro
 import {execFileSync} from 'node:child_process';
 import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {inspectPackage,releaseNames,preparePublication,preparePublish,publishPages,deployPages} from '../scripts/publish.mjs';
+import {inspectPackage,releaseNames,preparePublication,preparePublish,publishPages,deployPages,approvalPayload,prepareApproval,publishApproval} from '../scripts/publish.mjs';
 import {createHash} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {mkdir,mkdtemp,realpath,rm,writeFile} from 'node:fs/promises';
@@ -88,7 +88,7 @@ const stable=value=>Array.isArray(value)?`[${value.map(stable).join(',')}]`:valu
   const {describeConfiguration}=await import('../scripts/config.mjs');
   const rows=describeConfiguration().configuration.items;
   assert.deepEqual(rows.map(row=>[row.environment,row.name,row.accessLevel,row.kind]),[
-   ['production','CF_ACCOUNT_ID','public','deployment'],
+   ['production','CLOUDFLARE_ACCOUNT','public','deployment'],
    ['cloudflare','PAGES_DEPLOY','protected','operation'],
    ['citizenweb-approval','COLD_SIGNER_PUBLIC_KEY','protected','authorization']]);
   assert.equal(rows.some(row=>Object.hasOwn(row,'value')),false);
@@ -145,4 +145,23 @@ test('发布文件独立准备同一正式候选和前一生产部署，错误�
  const ready=await preparePublish({credentials,request,publicationRequest:source.request});assert.equal(ready.proof.run_id,42);assert.equal(ready.previousID,previous.id);assert.equal(calls,1);assert.equal(Object.hasOwn(ready,'credentials'),false);
  for(const invalid of [{environment:'preview'},{project_name:'other'},{id:'invalid'},{latest_stage:{status:'failure'}}])await assert.rejects(preparePublish({credentials,publicationRequest:source.request,request:async()=>Response.json({success:true,result:[{...previous,...invalid}]})}),/生产部署/u);
  await assert.rejects(preparePublish({credentials,publicationRequest:source.request,request:async()=>new Response(null,{status:403})}),/HTTP 403/u);
+});
+
+// 官网动作15业务金标归本产品；原生宿主不维护这套业务编码和字段规则。
+test('官网动作15字节金标、产品平台和准确Tag保持',async()=>{
+ const candidate={proof:{product_id:'citizenweb',delivery_channel:'web',version:'1.2.3',tag:'公民官网·Web·v1.2.3',source_sha:'a'.repeat(40),assets:[{name:'citizenweb-web-v1.2.3.tgz',sha256:'b'.repeat(64)}]},previousID:'00000000-0000-4000-8000-000000000001'};
+ const context={expires_at:1800000000,nonce:'11'.repeat(32)};
+ assert.deepEqual(approvalPayload(candidate,context),Buffer.concat([Buffer.from('28636974697a656e7765620c77656214312e322e33','hex'),Buffer.from('a'.repeat(40)+'b'.repeat(64),'hex'),Buffer.from([144]),Buffer.from(candidate.previousID),Buffer.from('00d2496b00000000'+'11'.repeat(32),'hex')]));
+ for(const changed of [{...candidate,previousID:'invalid'},{...candidate,proof:{...candidate.proof,tag:'公民官网·Web·v1.2.4'}},{...candidate,proof:{...candidate.proof,product_id:'foreign'}}])assert.throws(()=>approvalPayload(changed,context));
+ assert.throws(()=>approvalPayload(candidate,{...context,nonce:'0'.repeat(64)}));
+});
+test('官网通过通用声明及原准备提交命令发布，旧批准不能消费变化候选',async()=>{
+ const {describeAction}=await import('../scripts/config.mjs');const d=describeAction({flow:'publish',platform:'web'});assert.equal(d.code,15);assert.equal(d.entry,'scripts/publish.mjs');assert.equal(d.nodeVersion,'25.2.1');assert.deepEqual(d.prepare,d.publish);
+ const f=fixture(),configuration={'production:CLOUDFLARE_ACCOUNT':'1'.repeat(32),'cloudflare:PAGES_DEPLOY':'synthetic-pages-token-value'},context={expires_at:Math.floor(Date.now()/1000)+120,nonce:'12'.repeat(32)};
+ const prepared=await prepareApproval({configuration,context,publicationRequest:f.request,request:async()=>Response.json({success:true,result:[{id:'00000000-0000-4000-8000-000000000001',project_name:'citizenweb',environment:'production',latest_stage:{status:'success'}}]})});
+ let calls=0;const value={candidate:prepared.candidate,context,approvedPayload:prepared.payload_base64,configuration,runID:'123456789',nodePath:process.execPath};
+ const options={request:f.request,install:async()=>{},deploy:async payload=>{calls++;return {product_id:'citizenweb',platform:'web',project:'citizenweb',deployed:true,release_tag:payload.release_tag,source_sha:payload.source_sha};}};
+ assert.equal((await publishApproval(value,options)).deployed,true);assert.equal(calls,1);
+ await assert.rejects(publishApproval({...value,approvedPayload:Buffer.from('changed').toString('base64')},options));
+ await assert.rejects(publishApproval({...value,candidate:{...value.candidate,proof:{...value.candidate.proof,tag:'other'}}},options));assert.equal(calls,1);
 });

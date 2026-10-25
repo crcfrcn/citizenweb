@@ -26,7 +26,7 @@ CitizenWeb 涉及聊天时只作为依赖使用方；本条不代表尚未接入
 
 ## 当前编译与自动化合同
 
-scripts/config.mjs仅声明控制台所需的CF_ACCOUNT_ID、PAGES_DEPLOY和COLD_SIGNER_PUBLIC_KEY配置需求；不计算版本、不访问GitHub、不启动进程、不生成文件。scripts/build.mjs拥有本产品入口，独立CLI与控制台调用同一实现；导入不执行命令。控制台不拥有产品依赖或流程，不导入其私有宿主模块。
+scripts/config.mjs仅声明控制台所需的CLOUDFLARE_ACCOUNT、PAGES_DEPLOY和COLD_SIGNER_PUBLIC_KEY配置需求；不计算版本、不访问GitHub、不启动进程、不生成文件。scripts/build.mjs拥有本产品入口，独立CLI与控制台调用同一实现；导入不执行命令。控制台不拥有产品依赖或流程，不导入其私有宿主模块。
 
 本机与GitHub均沿原始依赖锁执行，缺缓存按原锁正常取得；真实下载、测试、编译、签名或验收失败必须失败。官方缓存只存可再生依赖与编译状态，不含签名材料；恢复/保存故障不阻塞。每轮现场归target/test或target/build的唯一目录，缓存原子领取且不等待，取消等待本轮进程组退出后清理；无法确认退出则保留现场并明确失败。
 
@@ -55,3 +55,9 @@ ESLint与TypeScript无输出检查唯一归test阶段，build阶段仅执行官�
 控制台通过scripts/config.mjs读取测试、编译与塔塔自动化声明；测试和编译仍由build.mjs执行，GitHub流程归本仓YAML；独立发布调用publish.mjs的prepare/publish命令。prepare只验真已有成功包并读取当前生产部署，原生冷签批准后publish才消费同一proof及previousID，通过官方Wrangler部署并回读；配置文件不转导出动作，发布不调用编译。
 
 本产品scripts/config.mjs的describeAction仅返回repository、workflow、ref、inputs，或既有本地进程命令声明；不导入构建实现、不派发GitHub请求、不处理令牌、版本或历史。控制台使用统一数据接口直接派发并只读观察准确Run；产品GitHub业务归所属既有YAML。本次自动化Run名称使用运行编号，正式构建及产物保持版本名称。已有工具和依赖复用，缺少时才按原声明准备。
+
+Cloudflare账户配置唯一名称为CLOUDFLARE_ACCOUNT，production环境保管原账户值；发布调用Wrangler时才映射到其官方CLOUDFLARE_ACCOUNT_ID环境变量。
+
+官网原生冷签接入由本产品scripts/config.mjs的describeAction({flow:'publish',platform:'web'})声明，继续采用钱包现有动作15及GMB+0x24域。公钥引用、阶段配置需求和Node版本归本产品公开声明，配置值只经通用原生私有标准输入交付。原prepare/publish命令保持；原来位于控制台的官网SCALE发布载荷编码及Tag/产品/平台/字段检查迁入本产品scripts/publish.mjs，不在控制台保留官网专属分支。
+
+批准绑定版本、源码、正式包摘要、当前生产部署、期限及本次随机挑战。publish重新核对准确载荷、成功正式包和当前生产部署，原Pages上传及回读继续使用已有实现；原锁Wrangler通过npm离线复用已有缓存，缺件明确失败。官网动作15的准确字节及篡改拒绝金标归test/release.test.mjs；控制台只测试通用会话、验签、隔离和私有输入，不解释官网业务字段。

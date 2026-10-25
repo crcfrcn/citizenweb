@@ -260,9 +260,9 @@ export async function publishPages({proof,runID,nodePath=process.execPath,previo
   const lock=JSON.parse(current.contents.get('package-lock.json'));
   if(source.devDependencies?.wrangler!=='4.121.0'||lock.packages?.['node_modules/wrangler']?.version!=='4.121.0')fail('正式包Wrangler锁无效');
   const environment={PATH:[dirname(nodePath),'/usr/bin','/bin'].join(':'),HOME:work,
-   npm_config_cache:join(work,'npm-cache'),CI:'1',WRANGLER_SEND_METRICS:'false'};
+   npm_config_cache:process.env.npm_config_cache||join(process.env.HOME,'.npm'),npm_config_offline:'true',CI:'1',WRANGLER_SEND_METRICS:'false'};
   const npmCLI=join(dirname(nodePath),'../lib/node_modules/npm/bin/npm-cli.js');
-  await install(nodePath,[npmCLI,'ci','--ignore-scripts','--no-audit','--no-fund'],work,environment,signal);
+  await install(nodePath,[npmCLI,'ci','--offline','--ignore-scripts','--no-audit','--no-fund'],work,environment,signal);
   signal?.throwIfAborted();beforeDeploy?.();
   const payload={schema:1,product_id:'citizenweb',platform:'web',run_id:runID,
    release_tag:proof.tag,source_sha:proof.source_sha,version:proof.version,
@@ -287,6 +287,26 @@ async function publicRequest(path,{raw=false}={}){
  return JSON.parse(Buffer.concat(chunks));
 }
 
+
+// 冷签业务字节归本产品；控制台只保存准确字节并验签，不解析这些字段。
+function approvalText(value){const data=Buffer.from(value,'utf8');let n=BigInt(data.length);if(n<64n)return Buffer.concat([Buffer.from([Number(n<<2n)]),data]);if(n<16384n){const size=Buffer.alloc(2);size.writeUInt16LE(Number((n<<2n)|1n));return Buffer.concat([size,data]);}fail('批准文本过长');}
+function approvalHex(value,width){if(typeof value!=='string'||!new RegExp('^[a-f0-9]{'+width*2+'}$','u').test(value)||/^0+$/u.test(value))fail('批准摘要无效');return Buffer.from(value,'hex');}
+export function approvalPayload(candidate,context){
+ if(!context||!Number.isSafeInteger(context.expires_at)||context.expires_at<=0)fail('批准期限无效');
+ const {proof,previousID}=candidate??{};
+ if(proof?.product_id!=='citizenweb'||proof.delivery_channel!=='web'||proof.tag!==publicationName(proof.version)||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(previousID||''))fail('官网批准候选身份无效');
+ const expiry=Buffer.alloc(8);expiry.writeBigUInt64LE(BigInt(context.expires_at));
+ return Buffer.concat([approvalText('citizenweb'),approvalText('web'),approvalText(proof.version),approvalHex(proof.source_sha,20),
+  approvalHex(proof.assets.find(asset=>asset.name===releaseNames(proof.version)[0])?.sha256,32),approvalText(previousID),expiry,approvalHex(context.nonce,32)]);
+}
+function approvalResponse(candidate,context){return {schema:1,product_id:'citizenweb',platform:'web',candidate,
+ payload_base64:approvalPayload(candidate,context).toString('base64'),version_tag:candidate.proof.tag,artifact_sha256:candidate.proof.assets.find(asset=>asset.name===releaseNames(candidate.proof.version)[0])?.sha256};}
+function approvalInput(value){if(!value||!value.context||typeof value.approvedPayload!=='string'||!Buffer.from(value.approvedPayload,'base64').equals(approvalPayload(value.candidate,value.context))||Buffer.from(value.approvedPayload,'base64').toString('base64')!==value.approvedPayload||value.context.expires_at<Math.floor(Date.now()/1000))fail('本次准确发布批准无效或过期');}
+
+function approvalCredentials(configuration){return {account:configuration?.['production:CLOUDFLARE_ACCOUNT'],token:configuration?.['cloudflare:PAGES_DEPLOY']};}
+export async function prepareApproval({configuration,context,...options}={}){return approvalResponse(await preparePublish({credentials:approvalCredentials(configuration),...options}),context);}
+export async function publishApproval(value,options={}){approvalInput(value);return publishPages({...value.candidate,runID:value.runID,nodePath:value.nodePath,credentials:approvalCredentials(value.configuration),...options});}
+
 const direct=process.argv[1]===import.meta.filename;
 if(direct&&!process.env.NODE_TEST_CONTEXT){
  const controller=new AbortController();for(const name of ['SIGTERM','SIGINT'])process.once(name,()=>controller.abort(Error('发布已取消')));
@@ -295,8 +315,8 @@ if(direct&&!process.env.NODE_TEST_CONTEXT){
   let text='';for await(const chunk of process.stdin){text+=chunk;if(Buffer.byteLength(text)>1024**2)fail('发布输入超限');}
   let value;try{value=JSON.parse(text);}catch{fail('发布输入JSON无效');}
   if(!value||typeof value!=='object'||Array.isArray(value))fail('发布输入无效');
-  if(process.argv[2]==='prepare')return preparePublish({...value,signal:controller.signal});
+  if(process.argv[2]==='prepare')return prepareApproval({...value,signal:controller.signal});
   if(process.argv[2]==='deploy')return deployPages(value.payload,value.credentials,{signal:controller.signal});
-  return publishPages({...value,signal:controller.signal});
+  return publishApproval(value,{signal:controller.signal});
  })().then(value=>process.stdout.write(JSON.stringify(value)+'\n')).catch(error=>{console.error(error.message);process.exitCode=1;});
 }
