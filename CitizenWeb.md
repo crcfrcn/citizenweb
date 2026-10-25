@@ -26,7 +26,7 @@ CitizenWeb 涉及聊天时只作为依赖使用方；本条不代表尚未接入
 
 ## 当前编译与自动化合同
 
-scripts/config.mjs仅声明控制台所需的CLOUDFLARE_ACCOUNT、PAGES_DEPLOY和COLD_SIGNER_PUBLIC_KEY配置需求；不计算版本、不访问GitHub、不启动进程、不生成文件。scripts/build.mjs拥有本产品入口，独立CLI与控制台调用同一实现；导入不执行命令。控制台不拥有产品依赖或流程，不导入其私有宿主模块。
+scripts/config.mjs仅声明控制台所需的CLOUDFLARE_ACCOUNT、PAGES_DEPLOY和COLDSIGN_PUBLICKEY配置需求；不计算版本、不访问GitHub、不启动进程、不生成文件。scripts/build.mjs拥有本产品入口，独立CLI与控制台调用同一实现；导入不执行命令。控制台不拥有产品依赖或流程，不导入其私有宿主模块。
 
 本机与GitHub均沿原始依赖锁执行，缺缓存按原锁正常取得；真实下载、测试、编译、签名或验收失败必须失败。官方缓存只存可再生依赖与编译状态，不含签名材料；恢复/保存故障不阻塞。每轮现场归target/test或target/build的唯一目录，缓存原子领取且不等待，取消等待本轮进程组退出后清理；无法确认退出则保留现场并明确失败。
 
