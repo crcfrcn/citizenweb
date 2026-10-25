@@ -87,10 +87,11 @@ const stable=value=>Array.isArray(value)?`[${value.map(stable).join(',')}]`:valu
  test('官网发布配置只声明账户、部署令牌与本产品冷签信任锚',async()=>{
   const {describeConfiguration}=await import('../scripts/config.mjs');
   const rows=describeConfiguration().configuration.items;
-  assert.deepEqual(rows.map(row=>[row.environment,row.name,row.accessLevel,row.kind]),[
-   ['production','CLOUDFLARE_ACCOUNT','public','deployment'],
-   ['cloudflare','PAGES_DEPLOY','protected','operation'],
-   ['citizenweb-approval','COLD_SIGNER_PUBLIC_KEY','protected','authorization']]);
+  assert.deepEqual(rows.map(row=>[row.name,row.accessLevel,row.kind]),[
+   ['CLOUDFLARE_ACCOUNT','public','deployment'],
+   ['PAGES_DEPLOY','protected','operation'],
+   ['COLDSIGN_PUBLICKEY','protected','authorization']]);
+  for(const row of rows)assert.deepEqual(Object.keys(row).sort(),['accessLevel','description','format','kind','name']);
   assert.equal(rows.some(row=>Object.hasOwn(row,'value')),false);
  });
  // 本产品上传回归使用已存在的合成正式包；所有云读取与工具调用均由本用例模拟。

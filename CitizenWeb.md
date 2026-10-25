@@ -61,3 +61,5 @@ Cloudflare账户配置唯一名称为CLOUDFLARE_ACCOUNT，production环境保管
 官网原生冷签接入由本产品scripts/config.mjs的describeAction({flow:'publish',platform:'web'})声明，继续采用钱包现有动作15及GMB+0x24域。公钥引用、阶段配置需求和Node版本归本产品公开声明，配置值只经通用原生私有标准输入交付。原prepare/publish命令保持；原来位于控制台的官网SCALE发布载荷编码及Tag/产品/平台/字段检查迁入本产品scripts/publish.mjs，不在控制台保留官网专属分支。
 
 批准绑定版本、源码、正式包摘要、当前生产部署、期限及本次随机挑战。publish重新核对准确载荷、成功正式包和当前生产部署，原Pages上传及回读继续使用已有实现；原锁Wrangler通过npm离线复用已有缓存，缺件明确失败。官网动作15的准确字节及篡改拒绝金标归test/release.test.mjs；控制台只测试通用会话、验签、隔离和私有输入，不解释官网业务字段。
+
+本产品配置项统一为name、description、accessLevel、kind、format五个必填字段；不适用规则明确填写“不适用”。name严格使用两组大写字母和一个下划线，同名共用控制台唯一值，当前页仅汇总实际声明的使用产品。操作列固定写入/更换、查看、删除；保密查看保留生物识别。现有配置消费者随声明同步改名，官方工具/API字段保持官方名称，不新增旧名兼容或配置副本。
