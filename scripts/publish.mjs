@@ -263,7 +263,7 @@ export async function publishPages({proof,runID,nodePath=process.execPath,previo
   const lock=JSON.parse(current.contents.get('package-lock.json'));
   if(source.devDependencies?.wrangler!=='4.121.0'||lock.packages?.['node_modules/wrangler']?.version!=='4.121.0')fail('正式包Wrangler锁无效');
   const environment={PATH:[dirname(nodePath),'/usr/bin','/bin'].join(':'),HOME:work,
-   npm_config_cache:process.env.npm_config_cache||join(process.env.HOME,'.npm'),npm_config_offline:'true',CI:'1',WRANGLER_SEND_METRICS:'false'};
+   npm_config_cache:process.env.npm_config_cache||fileURLToPath(new URL('../target/cache/npm',import.meta.url)),npm_config_offline:'true',CI:'1',WRANGLER_SEND_METRICS:'false'};
   const npmCLI=join(dirname(nodePath),'../lib/node_modules/npm/bin/npm-cli.js');
   await install(nodePath,[npmCLI,'ci','--offline','--ignore-scripts','--no-audit','--no-fund'],work,environment,signal);
   signal?.throwIfAborted();beforeDeploy?.();

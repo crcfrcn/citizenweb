@@ -103,7 +103,7 @@ else{const data=JSON.parse(readFileSync(join(root,'responses.json'))),url=new UR
    return {product_id:'citizenweb',platform:'web',release_tag:proof.tag,source_sha:proof.source_sha,project:'citizenweb',deployed:true};};
   const options={proof,runID:'123456789',nodePath:process.execPath,
    previousID:'00000000-0000-4000-8000-000000000001',request:source.request,deploy,
-   install:async(_node,_args,work)=>{installs++;assert.ok(work.includes('/target/publish/web/'));}};
+   install:async(_node,_args,work,environment)=>{installs++;assert.ok(work.includes('/target/publish/web/'));assert.equal(environment.npm_config_cache,process.env.npm_config_cache||join(root,'target/cache/npm'));assert.equal(environment.npm_config_offline,'true');}};
   const result=await publishPages(options);assert.equal(result.deployed,true);assert.equal(installs,1);assert.equal(calls,1);
   await assert.rejects(publishPages({...options,proof:{...proof,source_sha:'b'.repeat(40)}}),/授权后发生变化/u);
   assert.equal(calls,1);
