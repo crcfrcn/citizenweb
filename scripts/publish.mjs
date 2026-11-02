@@ -138,15 +138,18 @@ export async function preparePublish({credentials,request=fetch,publicationReque
 // 正式发布重新读取并验真同一个 Release；只在本轮独占目录物化经过清单约束的成员。
 
 // 产品拥有工具执行、云请求及失败回执；凭据只驻留本轮内存，不写入命令行或日志。
-async function runTool(command,args,cwd,environment,signal,{input,protectedValues=[],timeout=300000}={}){
+async function runTool(command,args,cwd,environment,signal,{input,protectedValues=[],timeout=300000,maximumBytes}={}){
  signal?.throwIfAborted();
  return new Promise((resolve,reject)=>{
   const child=spawn(command,args,{cwd,env:environment,detached:true,stdio:[input===undefined?'ignore':'pipe','pipe','pipe']});
-  let output='',diagnostic='',failure,timer,forced;
+  let output='',diagnostic='',failure,timer,forced,outputBytes=0;const chunks=[];
   const stop=()=>{try{if(child.pid)process.kill(-child.pid,'SIGTERM');}catch(error){if(error.code!=='ESRCH')failure??=error;}
    forced??=setTimeout(()=>{try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{}},5000);forced.unref();};
   const abort=()=>{failure??=signal.reason??Error('发布已取消');stop();};
-  child.stdout.on('data',chunk=>{if(!protectedValues.length)output=(output+chunk.toString('utf8')).slice(-65536);});
+  child.stdout.on('data',chunk=>{if(protectedValues.length)return;
+   if(maximumBytes!==undefined){outputBytes+=chunk.length;if(outputBytes>maximumBytes){failure??=Error('GitHub公开读取超限');stop();}else chunks.push(chunk);}
+   else output=(output+chunk.toString('utf8')).slice(-65536);
+  });
   child.stderr.on('data',chunk=>{if(!protectedValues.length)diagnostic=(diagnostic+chunk.toString('utf8')).slice(-4096);});
   child.once('error',error=>{failure??=error;});
   child.once('close',(code,termination)=>{
@@ -156,7 +159,7 @@ async function runTool(command,args,cwd,environment,signal,{input,protectedValue
     const detail=protectedValues.length?'':diagnostic.replace(/[\x00-\x1f\x7f]/gu,' ').slice(-1024);
     const error=Error('发布工具失败：'+(failure?.code??code)+'，信号='+(termination||'无')+(failure?'；'+(failure.code||failure.message):'')+(detail?'；'+detail:''),{cause:failure});
     reject(error);
-   }else resolve(output);
+   }else resolve(maximumBytes===undefined?output:Buffer.concat(chunks));
   });
   signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
   timer=setTimeout(()=>{failure??=Error('发布工具超时');stop();},timeout);timer.unref();
@@ -277,14 +280,13 @@ export async function publishPages({proof,runID,nodePath=process.execPath,previo
 
 async function publicRequest(path,{raw=false}={}){
  const url=path.startsWith('https:')?new URL(path):new URL(`https://api.github.com/repos/${repository}/${path}`);
- if(url.protocol!=='https:'||url.hostname!=='api.github.com'||!url.pathname.startsWith(`/repos/${repository}/`)||url.username||url.password)fail('GitHub公开来源无效');
- let response=await fetch(url,{method:'GET',redirect:raw?'manual':'error',credentials:'omit',headers:{Accept:raw?'application/octet-stream':'application/vnd.github+json'},signal:AbortSignal.timeout(300000)});
- if(raw&&response.status===302){const next=new URL(response.headers.get('location'));if(next.protocol!=='https:'||next.username||next.password
-  ||!['release-assets.githubusercontent.com','objects.githubusercontent.com'].includes(next.hostname))fail('资产重定向越界');
-  response=await fetch(next,{method:'GET',redirect:'error',credentials:'omit',signal:AbortSignal.timeout(300000)});}
- if(!response.ok)fail('公开读取失败');if(raw)return response;
- let size=0;const chunks=[];for await(const chunk of response.body){size+=chunk.length;if(size>8*1024**2)fail('公开JSON超限');chunks.push(chunk);}
- return JSON.parse(Buffer.concat(chunks));
+ if(url.origin!=='https://api.github.com'||!url.pathname.startsWith(`/repos/${repository}/`)||url.username||url.password||url.hash)fail('GitHub公开来源无效');
+ // 复用gh现有认证，避免匿名60次/小时限额；令牌不读取、不进入命令参数或输出。
+ const environment={...process.env,PATH:[process.env.PATH,'/opt/homebrew/bin'].filter(Boolean).join(':'),GH_HOST:'github.com',GH_PROMPT_DISABLED:'1',GH_NO_UPDATE_NOTIFIER:'1'};
+ const bytes=await runTool('gh',['api','--method','GET',url.href,'--header','Accept: '+(raw?'application/octet-stream':'application/vnd.github+json')],
+  fileURLToPath(new URL('../',import.meta.url)),environment,undefined,{maximumBytes:raw?256*1024**2:8*1024**2});
+ if(raw)return new Response(bytes);
+ try{return JSON.parse(bytes);}catch{fail('GitHub公开JSON无效');}
 }
 
 

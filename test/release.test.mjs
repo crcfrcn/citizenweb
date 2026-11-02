@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,symlinkSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,symlinkSync,chmodSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -51,6 +51,34 @@ const stable=value=>Array.isArray(value)?`[${value.map(stable).join(',')}]`:valu
   const request=async path=>path.startsWith('actions/runs?')?{workflow_runs:[run]}:path.startsWith('releases?')?[release]:path.startsWith('git/ref/tags/')?{ref:'refs/tags/'+tag,object:{type:'commit',sha:source}}:{body:Readable.from([body.get(release.assets.find(asset=>asset.url===path)?.name)])};
   return {run,release,body,request};
  }
+ test('默认公开读取复用gh认证并完整保留大JSON与二进制附件，读取失败不降级匿名',async t=>{
+  const parent=join(root,'target/test');mkdirSync(parent,{recursive:true});
+  const work=mkdtempSync(join(parent,'authenticated-release-'));t.after(()=>rmSync(work,{recursive:true,force:true}));
+  const f=fixture();f.run.padding='x'.repeat(70_000);
+  writeFileSync(join(work,'responses.json'),JSON.stringify({run:f.run,release:f.release,body:Object.fromEntries([...f.body].map(([name,bytes])=>[name,bytes.toString('base64')]))}));
+  writeFileSync(join(work,'gh'),'#!'+process.execPath+'\n'+String.raw`
+import {readFileSync,existsSync,appendFileSync} from 'node:fs';
+import {dirname,join} from 'node:path';
+import assert from 'node:assert/strict';
+const root=dirname(process.argv[1]),args=process.argv.slice(2);
+assert.deepEqual(args.slice(0,3),['api','--method','GET']);assert.equal(process.env.GH_HOST,'github.com');
+assert.equal(process.env.GH_PROMPT_DISABLED,'1');assert.ok(!args.includes('synthetic-gh-credential'));
+appendFileSync(join(root,'calls.jsonl'),JSON.stringify(args)+'\n');
+if(existsSync(join(root,'mode'))){const mode=readFileSync(join(root,'mode'),'utf8');if(mode==='oversized')process.stdout.write('x'.repeat(8*1024**2+1));else{process.stderr.write('synthetic authentication failure');process.exitCode=7;}}
+else{const data=JSON.parse(readFileSync(join(root,'responses.json'))),url=new URL(args[3]),path=url.pathname.replace('/repos/crcfrcn/citizenweb/','');
+ assert.equal(url.origin,'https://api.github.com');
+ const value=path==='actions/runs'?{workflow_runs:[data.run]}:path==='releases'?[data.release]:path.startsWith('git/ref/tags/')?{ref:'refs/tags/'+data.release.tag_name,object:{type:'commit',sha:data.run.head_sha}}:undefined;
+ if(value)process.stdout.write(JSON.stringify(value));else{assert.equal(args[5],'Accept: application/octet-stream');const asset=data.release.assets.find(a=>a.url===url.href);assert.ok(asset);process.stdout.write(Buffer.from(data.body[asset.name],'base64'));}}
+`);chmodSync(join(work,'gh'),0o700);
+  const previousPath=process.env.PATH,previousToken=process.env.GH_TOKEN;
+  process.env.PATH=work+':'+previousPath;process.env.GH_TOKEN='synthetic-gh-credential';
+  try{
+   const proof=await preparePublication();assert.equal(proof.version,'1.0.0');assert.equal(proof.assets.length,3);assert.equal(proof.archive_files,8);
+   assert.equal(readFileSync(join(work,'calls.jsonl'),'utf8').trim().split('\n').length,6);
+   writeFileSync(join(work,'mode'),'failure');await assert.rejects(preparePublication(),/synthetic authentication failure/u);
+   writeFileSync(join(work,'mode'),'oversized');await assert.rejects(preparePublication(),/读取超限/u);
+  }finally{process.env.PATH=previousPath;if(previousToken===undefined)delete process.env.GH_TOKEN;else process.env.GH_TOKEN=previousToken;}
+ });
  test('成功Web自动化的三件正式资产与全部归档成员独立验真',async()=>{
   const value=await preparePublication({request:fixture().request});assert.equal(value.archive_files,8);assert.equal(value.assets.length,3);assert.equal(value.version,'1.0.0');
   assert.equal(value.tag,'公民官网·Web·v1.0.0');assert.deepEqual(value.assets.map(asset=>asset.name),names);
