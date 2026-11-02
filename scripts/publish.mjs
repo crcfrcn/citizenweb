@@ -305,7 +305,7 @@ function approvalResponse(candidate,context){return {schema:1,product_id:'citize
  payload_base64:approvalPayload(candidate,context).toString('base64'),version_tag:candidate.proof.tag,artifact_sha256:candidate.proof.assets.find(asset=>asset.name===releaseNames(candidate.proof.version)[0])?.sha256};}
 function approvalInput(value){if(!value||!value.context||typeof value.approvedPayload!=='string'||!Buffer.from(value.approvedPayload,'base64').equals(approvalPayload(value.candidate,value.context))||Buffer.from(value.approvedPayload,'base64').toString('base64')!==value.approvedPayload||value.context.expires_at<Math.floor(Date.now()/1000))fail('本次准确发布批准无效或过期');}
 
-function approvalCredentials(configuration){return {account:configuration?.['production:CLOUDFLARE_ACCOUNT'],token:configuration?.['cloudflare:PAGES_DEPLOY']};}
+function approvalCredentials(configuration){return {account:configuration?.CLOUDFLARE_ACCOUNT,token:configuration?.PAGES_DEPLOY};}
 export async function prepareApproval({configuration,context,...options}={}){return approvalResponse(await preparePublish({credentials:approvalCredentials(configuration),...options}),context);}
 export async function publishApproval(value,options={}){approvalInput(value);return publishPages({...value.candidate,runID:value.runID,nodePath:value.nodePath,credentials:approvalCredentials(value.configuration),...options});}
 

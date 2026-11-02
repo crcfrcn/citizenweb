@@ -186,7 +186,8 @@ test('官网动作15字节金标、产品平台和准确Tag保持',async()=>{
 });
 test('官网通过通用声明及原准备提交命令发布，旧批准不能消费变化候选',async()=>{
  const {describeAction}=await import('../scripts/config.mjs');const d=describeAction({flow:'publish',platform:'web'});assert.equal(d.code,15);assert.equal(d.entry,'scripts/publish.mjs');assert.equal(d.nodeVersion,'25.2.1');assert.deepEqual(d.prepare,d.publish);
- const f=fixture(),configuration={'production:CLOUDFLARE_ACCOUNT':'1'.repeat(32),'cloudflare:PAGES_DEPLOY':'synthetic-pages-token-value'},context={expires_at:Math.floor(Date.now()/1000)+120,nonce:'12'.repeat(32)};
+ const f=fixture(),configuration={CLOUDFLARE_ACCOUNT:'1'.repeat(32),PAGES_DEPLOY:'synthetic-pages-token-value'},context={expires_at:Math.floor(Date.now()/1000)+120,nonce:'12'.repeat(32)};
+ await assert.rejects(prepareApproval({configuration:{'production:CLOUDFLARE_ACCOUNT':configuration.CLOUDFLARE_ACCOUNT,'cloudflare:PAGES_DEPLOY':configuration.PAGES_DEPLOY},context,publicationRequest:f.request,request:async()=>{throw Error('旧键不应访问Cloudflare');}}),/凭据无效/u);
  const prepared=await prepareApproval({configuration,context,publicationRequest:f.request,request:async()=>Response.json({success:true,result:[{id:'00000000-0000-4000-8000-000000000001',project_name:'citizenweb',environment:'production',latest_stage:{status:'success'}}]})});
  let calls=0;const value={candidate:prepared.candidate,context,approvedPayload:prepared.payload_base64,configuration,runID:'123456789',nodePath:process.execPath};
  const options={request:f.request,install:async()=>{},deploy:async payload=>{calls++;return {product_id:'citizenweb',platform:'web',project:'citizenweb',deployed:true,release_tag:payload.release_tag,source_sha:payload.source_sha};}};
