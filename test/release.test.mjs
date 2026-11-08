@@ -75,14 +75,14 @@ else{const data=JSON.parse(readFileSync(join(root,'responses.json'))),url=new UR
   const previousPath=process.env.PATH,previousToken=process.env.GH_TOKEN;
   process.env.PATH=work+':'+previousPath;process.env.GH_TOKEN='synthetic-gh-credential';
   try{
-   const proof=await preparePublication();assert.equal(proof.version,'1.0.0');assert.equal(proof.assets.length,3);assert.equal(proof.archive_files,8);
+   const proof=await preparePublication();assert.equal(proof.version,'1.0.0');assert.equal(proof.assets.length,3);assert.equal(proof.archive_files,11);
    assert.equal(readFileSync(join(work,'calls.jsonl'),'utf8').trim().split('\n').length,6);
    writeFileSync(join(work,'mode'),'failure');await assert.rejects(preparePublication(),/synthetic authentication failure/u);
    writeFileSync(join(work,'mode'),'oversized');await assert.rejects(preparePublication(),/读取超限/u);
   }finally{process.env.PATH=previousPath;if(previousToken===undefined)delete process.env.GH_TOKEN;else process.env.GH_TOKEN=previousToken;}
  });
  test('成功Web自动化的三件正式资产与全部归档成员独立验真',async()=>{
-  const value=await preparePublication({request:fixture().request});assert.equal(value.archive_files,8);assert.equal(value.assets.length,3);assert.equal(value.version,'1.0.0');
+  const value=await preparePublication({request:fixture().request});assert.equal(value.archive_files,11);assert.equal(value.assets.length,3);assert.equal(value.version,'1.0.0');
   assert.equal(value.tag,'公民官网·Web·v1.0.0');assert.deepEqual(value.assets.map(asset=>asset.name),names);
  });
  test('归档缺失、来源错配与重复成功Run均拒绝',async()=>{
