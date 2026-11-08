@@ -1,11 +1,97 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdtempSync,mkdirSync,cpSync,readFileSync,rmSync,existsSync,readdirSync,writeFileSync,chmodSync} from 'node:fs';
-import {join} from 'node:path';
+import {join,dirname} from 'node:path';
 import {root,displayName,run} from '../scripts/build.mjs';
-import {describeAction} from '../scripts/config.mjs';
+import {constitutionFiles,describeAction} from '../scripts/config.mjs';
 import {initialVersion,platforms,repository} from '../scripts/build.mjs';
 const platform=Object.keys(platforms)[0];
+if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多台电脑共享正文',async t=>{
+ const dist=process.env.CONSTITUTION_OUTPUT;
+ assert.deepEqual(JSON.parse(readFileSync(join(dist,'_routes.json'))),{version:1,include:['/constitution/data'],exclude:[]});
+ const wasm=readFileSync(join(dist,'_worker.js/index_bg.wasm')).toString('base64');
+ const entry=readFileSync(join(dist,'_worker.js/index.js'),'utf8').replace(
+  'import wasm from "./index_bg.wasm";',
+  `const wasm=new WebAssembly.Module(Uint8Array.from(atob('${wasm}'),char=>char.charCodeAt(0)));`);
+ const {default:worker}=await import('data:text/javascript;base64,'+Buffer.from(entry).toString('base64'));
+ const records=new Map(),calls={get:0,put:0,origin:0};
+ let now=2_000_000,failed=false;
+ t.mock.method(Date,'now',()=>now);
+ const digest='0x'+'1'.repeat(64),body={html:'<h1>宪法</h1>',blake2_256:digest,source:'legislation-raw'};
+ t.mock.method(globalThis,'fetch',async request=>{
+  calls.origin++;
+  assert.equal(request.url,'https://chain.crcfrcn.com/');
+  assert.equal(request.method,'POST');
+  assert.equal(request.redirect,'error');
+  assert.equal(request.headers.get('cf-access-client-id'),'fixture-client');
+  assert.equal(request.headers.get('cf-access-client-secret'),'fixture-token');
+  assert.deepEqual(await request.json(),[
+   {jsonrpc:'2.0',id:1,method:'chain_getBlockHash',params:[0]},
+   {jsonrpc:'2.0',id:2,method:'constitution_getDocument',params:[]}]);
+  if(failed)return new Response(null,{status:502});
+  return Response.json([{jsonrpc:'2.0',id:2,result:body},{jsonrpc:'2.0',id:1,result:digest}]);
+ });
+ const env={CHAIN_GENESISHASH:digest,CFACCESS_CLIENTID:'fixture-client',CHAIN_SECRET:'fixture-token',
+  ASSETS:{async fetch(){return new Response('asset');}},
+  CACHE:{
+   async get(key){
+    calls.get++;assert.equal(key,'constitution');
+    const current=records.get(key);
+    return current?{etag:current.etag,size:current.bytes.length,uploaded:current.uploaded,body:new Response(current.bytes).body}:null;
+   },
+   async put(key,bytes,{onlyIf}){
+    calls.put++;assert.equal(key,'constitution');
+    const current=records.get(key);
+    if(onlyIf.etagDoesNotMatch==='*'?current:onlyIf.etagMatches!==current?.etag)return null;
+    const row={etag:createHash('sha256').update(bytes).digest('hex'),bytes:Uint8Array.from(bytes),uploaded:new Date(now)};
+    records.set(key,row);
+    return {etag:row.etag};
+   },
+  }};
+ const url='https://www.crcfrcn.com/constitution/data';
+ const fetch=(ip,options={})=>worker.fetch(new Request(options.url??url,{
+  method:options.method??'GET',headers:ip?{'cf-connecting-ip':ip}:undefined}),env);
+ assert.equal(await (await fetch(undefined,{url:'https://www.crcfrcn.com/about'})).text(),'asset');
+ assert.equal((await fetch('192.0.2.1',{method:'POST'})).status,405);
+ assert.equal((await fetch('192.0.2.1',{url:url+'?x=1'})).status,404);
+ assert.deepEqual(calls,{get:0,put:0,origin:0});
+ const [one,two]=await Promise.all([fetch('192.0.2.1'),fetch('192.0.2.1')]);
+ assert.ok(one.ok||two.ok);
+ for(const reply of [one,two]){
+  if(reply.ok){
+   assert.equal(reply.headers.get('cache-control'),'private, max-age=86400');
+   assert.deepEqual(await reply.json(),{cached_at:now,...body});
+  }else{
+   assert.equal(reply.status,503);
+   assert.equal(reply.headers.get('retry-after'),'2');
+  }
+ }
+ assert.equal(calls.origin,1);
+ assert.equal(records.size,1);
+ const firstEtag=records.get('constitution').etag;
+ const before={...calls};
+ now+=1000;
+ for(const ip of ['192.0.2.1','192.0.2.2']){
+  const cached=await fetch(ip);
+  assert.equal(cached.status,200);
+  assert.equal(cached.headers.get('cache-control'),'private, max-age=86399');
+  assert.deepEqual(await cached.json(),{cached_at:now-1000,...body});
+ }
+ assert.deepEqual(calls,{...before,get:before.get+2});
+ now+=86_398_999;
+ assert.equal((await fetch('192.0.2.1')).headers.get('cache-control'),'private, max-age=0');
+ now++;
+ assert.equal((await fetch('192.0.2.2')).status,200);
+ assert.equal(calls.origin,2);
+ assert.notEqual(records.get('constitution').etag,firstEtag);
+ now+=86_400_000;
+ failed=true;
+ assert.equal((await fetch('192.0.2.2')).status,503);
+ failed=false;
+ assert.equal((await fetch('192.0.2.2')).status,200);
+ assert.equal(calls.origin,4);
+});
 test('配置仅声明和引用，导入不派发、不生成现场',async()=>{
  const config=await import('../scripts/config.mjs');assert.equal(config.describeConfiguration().schema,1);
  const source=readFileSync(join(root,'scripts/config.mjs'),'utf8');assert.doesNotMatch(source,/\b(?:spawn|execFile|fetch|dispatch|readFile|writeFile)\s*\(/u);
@@ -97,6 +183,9 @@ test('ASCII正式附件与中文标签逐件回读，附件损坏和SHA错配均
   writeFileSync(join(work,'source-view/package.json'),JSON.stringify({version:'0.0.0',devDependencies:{vite:'8',wrangler:'4'}}));
   writeFileSync(join(work,'source-view/package-lock.json'),JSON.stringify({version:'0.0.0',packages:{'':{version:'0.0.0'}}}));
   writeFileSync(join(work,'dist/index.html'),'<html>synthetic</html>');
+  for(const member of constitutionFiles){
+   const file=join(work,'dist',member);mkdirSync(dirname(file),{recursive:true});writeFileSync(file,'synthetic');
+  }
   const env={PRODUCT_WORK:work,PRODUCT_VERSION:'1.0.12',GITHUB_REPOSITORY:repository,GITHUB_SHA:'a'.repeat(40),GITHUB_RUN_ID:'42',GITHUB_RUN_ATTEMPT:'1',MOCK_MODE:mode};
   // 子进程走真实CLI；Node测试上下文不应阻止该合成归档入口执行。
   await run(process.execPath,[join(root,'scripts/build.mjs'),'package','web'],{env:{...env,NODE_TEST_CONTEXT:''},capture:true});
@@ -106,6 +195,7 @@ test('ASCII正式附件与中文标签逐件回读，附件损坏和SHA错配均
 import {readFileSync,writeFileSync,copyFileSync,readdirSync} from 'node:fs';
 import {join,basename} from 'node:path';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 const args=process.argv.slice(2),env=process.env,file=join(env.PRODUCT_WORK,'state.json'),state=JSON.parse(readFileSync(file));
 const option=name=>args[args.indexOf(name)+1],reply=value=>process.stdout.write(JSON.stringify(value));
 if(args[0]==='api'){

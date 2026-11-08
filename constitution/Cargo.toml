@@ -1,0 +1,23 @@
+[package]
+name = "constitution"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["raw_value"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "=0.3.104"
+wasm-bindgen = "=0.2.127"
+web-sys = { version = "=0.3.104", features = ["AbortSignal", "Crypto", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "Request", "RequestInit", "RequestRedirect", "Response", "ResponseInit", "WorkerGlobalScope"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"

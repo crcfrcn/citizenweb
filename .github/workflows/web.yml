@@ -78,8 +78,16 @@ jobs:
         with:
           path: |
             target/cache
-          key: citizenweb-web-official-25.2.1-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: citizenweb-web-official-25.2.1-${{ hashFiles('package-lock.json') }}-
+          key: citizenweb-web-official-25.2.1-${{ hashFiles('package-lock.json', 'constitution/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: citizenweb-web-official-25.2.1-${{ hashFiles('package-lock.json', 'constitution/Cargo.lock') }}-
+      - name: 复用已交付的宪法工具
+        run: |
+          set -euo pipefail
+          rust="$(node --input-type=module -e "import {constitutionTools} from './scripts/config.mjs'; console.log(constitutionTools.rust)")"
+          RUSTUP_AUTO_INSTALL=0 rustup target list --installed --toolchain "$rust" | grep -Fx wasm32-unknown-unknown
+          if ! command -v wasm-bindgen >/dev/null && [ -x target/cache/worker/bin/wasm-bindgen ]; then
+            printf 'WASM_BINDGEN=%s/target/cache/worker/bin/wasm-bindgen\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          fi
       - name: 真实代码回归与严格分析
         run: |
           node scripts/build.mjs test "$PLATFORM"

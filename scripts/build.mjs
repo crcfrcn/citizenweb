@@ -5,9 +5,11 @@ import {mkdirSync,mkdtempSync,readFileSync,writeFileSync,copyFileSync,cpSync,rmS
 import {join,dirname,resolve,relative,sep,basename} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
+import {homedir} from 'node:os';
+import {constitutionFiles,constitutionTools} from './config.mjs';
 // 构建与自动化的参数归本执行入口；配置文件只声明控制台所需配置项。
 export const repository='crcfrcn/citizenweb';
-export const tools=Object.freeze({node:JSON.parse(readFileSync(new URL('../package.json',import.meta.url))).engines.node});
+export const tools=Object.freeze({node:JSON.parse(readFileSync(new URL('../package.json',import.meta.url))).engines.node,...constitutionTools});
 export const platforms=Object.freeze({web:'Web'});
 export const initialVersion='1.0.12';
 const artifactPrefix='公民官网·Web·v',artifactFilePrefix='citizenweb-web-v';
@@ -90,7 +92,7 @@ export function httpsOptions(environment=process.env){
 }
 function webEnvironment(work,cache){return {npm_config_cache:join(cache.base,'npm'),TMPDIR:directory(join(work,'tmp')),CI:'true',WRANGLER_SEND_METRICS:'false'};}
 async function prepareWeb(work,env){
- const project=sourceView(work,['src','config','scripts','test','index.html','tsconfig.json','package.json','package-lock.json']);
+ const project=sourceView(work,['frontend','constitution','config','scripts','test','index.html','tsconfig.json','package.json','package-lock.json']);
  await run('npm',['ci','--prefer-offline','--no-audit','--no-fund'],{cwd:project,env});
  if(!readFileSync(join(project,'package-lock.json')).equals(readFileSync(join(root,'package-lock.json'))))throw Error('npm原锁改变');return project;
 }
@@ -98,10 +100,39 @@ async function webChecks(project,env){
  await run('npm',['exec','--no','--','eslint','--config','config/eslint.config.js','.'],{cwd:project,env});
  await run('npm',['exec','--no','--','tsc','-b','tsconfig.json'],{cwd:project,env});
 }
+function rustEnvironment(work){
+ return {RUSTUP_TOOLCHAIN:tools.rust,RUSTUP_AUTO_INSTALL:'0',CARGO_TARGET_DIR:join(work,'cargo'),WASM_BINDGEN_USE_JS_SYS:'1'};
+}
+async function buildConstitution(project,env,output){
+ await run('cargo',['build','--offline','--locked','--manifest-path','constitution/Cargo.toml','--target','wasm32-unknown-unknown','--release'],{cwd:project,env});
+ const cached=join(homedir(),'Library/Caches/worker-build','wasm-bindgen-aarch64-apple-darwin-'+tools.bindgen,'wasm-bindgen');
+ const bindgen=process.env.WASM_BINDGEN||(process.platform==='darwin'&&process.arch==='arm64'&&existsSync(cached)?cached:'wasm-bindgen');
+ const version=await run(bindgen,['--version'],{cwd:project,env,capture:true});
+ if(version!=='wasm-bindgen '+tools.bindgen)throw Error('宪法 wasm-bindgen 版本不符合产品声明');
+ const worker=join(output,'_worker.js'),module=join(worker,'index.js');
+ await run(bindgen,[join(env.CARGO_TARGET_DIR,'wasm32-unknown-unknown/release/constitution.wasm'),
+  '--target','web','--out-dir',worker,'--out-name','index','--no-typescript','--remove-name-section','--remove-producers-section'],{cwd:project,env});
+ const glue=readFileSync(module,'utf8'),initializer='export { initSync, __wbg_init as default };';
+ if(!glue.includes(initializer))throw Error('宪法 WASM 缺少 Pages 初始化入口');
+ put(module,glue.replace(initializer,`import wasm from "./index_bg.wasm";
+initSync({module: wasm});
+export default {fetch: fetchWorker};
+`));
+ put(join(output,'_routes.json'),JSON.stringify({version:1,include:['/constitution/data'],exclude:[]})+'\n');
+}
 export async function testProduct(){
  nodeCheck();await run(process.execPath,['--test','test/build.test.mjs','test/release.test.mjs'],{cwd:root});
  const work=task('test','web'),cache=claimCache(work);let safe=true;
- try{const env=webEnvironment(work,cache),project=await prepareWeb(work,env);await webChecks(project,env);return {tests:true};}
+ try{
+  const env={...webEnvironment(work,cache),...rustEnvironment(work)},project=await prepareWeb(work,env);
+  await webChecks(project,env);
+  await run('cargo',['test','--offline','--locked','--manifest-path','constitution/Cargo.toml'],{cwd:project,env});
+  const output=join(work,'dist');
+  await buildConstitution(project,env,output);
+  await run(process.execPath,['--test','--test-name-pattern','^宪法 Worker','test/build.test.mjs'],
+   {cwd:project,env:{...env,CONSTITUTION_OUTPUT:output}});
+  return {tests:true};
+ }
  catch(error){safe=!error.keepWork;throw error;}finally{if(safe){cache.release();rmSync(work,{recursive:true,force:true});}}
 }
 export async function buildProduct(){
@@ -109,9 +140,10 @@ export async function buildProduct(){
  const work=supplied?directory(supplied):task('build','web'),cache=claimCache(work);let complete=false,safe=true;
  try{
   // 静态检查唯一归test阶段，编译仅由官方Vite执行。
-  const env=webEnvironment(work,cache),project=await prepareWeb(work,env),dist=join(work,'dist');
+  const env={...webEnvironment(work,cache),...rustEnvironment(work)},project=await prepareWeb(work,env),dist=join(work,'dist');
   await run('npm',['exec','--no','--','vite','build','--config','config/vite.config.ts','--outDir',dist],{cwd:project,env});
-  put(join(dist,'whitepaper/content.json'),whitepaperContent(readFileSync(join(project,'src/whitepaper.md'),'utf8'),name=>readFileSync(join(project,'src/assets',name))));
+  put(join(dist,'whitepaper/content.json'),whitepaperContent(readFileSync(join(project,'frontend/whitepaper.md'),'utf8'),name=>readFileSync(join(project,'frontend/assets',name))));
+  await buildConstitution(project,env,dist);
   if(!lstatSync(join(dist,'index.html')).isFile())throw Error('官网入口未生成');complete=true;return {work,output:dist};
  }catch(error){safe=!error.keepWork;throw error;}finally{if(safe){cache.release();if(!complete)rmSync(work,{recursive:true,force:true});}}
 }
@@ -121,13 +153,14 @@ export async function packageProduct(){
  const version=process.env.PRODUCT_VERSION;displayName('web',version);
  // 物理文件使用稳定ASCII名；中文显示名由GitHub官方label承载。
  const title=artifactFilePrefix+version,project=join(work,'source-view'),payload=directory(join(work,'package')),output=directory(join(work,'artifact'));copy(join(work,'dist'),join(payload,'dist'));
+ if(!constitutionFiles.every(name=>lstatSync(join(payload,'dist',name)).isFile()))throw Error('官网宪法产物不完整');
  const pkg=JSON.parse(readFileSync(join(project,'package.json'))),lock=JSON.parse(readFileSync(join(project,'package-lock.json')));pkg.version=version;lock.version=version;lock.packages[''].version=version;
  put(join(payload,'package.json'),JSON.stringify(pkg)+'\n');put(join(payload,'package-lock.json'),JSON.stringify(lock)+'\n');
  const collect=directory=>readdirSync(directory,{withFileTypes:true}).flatMap(entry=>{const path=join(directory,entry.name);if(entry.isSymbolicLink())throw Error('官网产物禁止链接');return entry.isDirectory()?collect(path):[path];});
  const entries=()=>collect(payload).map(file=>({path:relative(payload,file).split(sep).join('/'),sha256:sha(readFileSync(file))})).sort((a,b)=>a.path.localeCompare(b.path));
  const assets=entries().filter(row=>row.path.startsWith('dist/')),assets_sha256=sha(Buffer.from(stable(assets))),source=process.env.GITHUB_SHA;
  put(join(payload,'dist/citizenweb-release.json'),JSON.stringify({product_id:'citizenweb',delivery_channel:'web',software_version:version,git_commit_sha:source,assets_sha256})+'\n');
- const manifest={product_id:'citizenweb',delivery_channel:'web',software_version:version,git_commit_sha:source,tools:{node:tools.node,npm:await run('npm',['--version'],{capture:true}),vite:pkg.devDependencies.vite,wrangler:pkg.devDependencies.wrangler},assets_sha256,files:entries()};
+ const manifest={product_id:'citizenweb',delivery_channel:'web',software_version:version,git_commit_sha:source,tools:{node:tools.node,npm:await run('npm',['--version'],{capture:true}),vite:pkg.devDependencies.vite,wrangler:pkg.devDependencies.wrangler,...constitutionTools},assets_sha256,files:entries()};
  put(join(payload,'release-manifest.json'),JSON.stringify(manifest,null,2)+'\n');put(join(payload,'SHA256SUMS'),entries().map(row=>row.sha256+'  '+row.path).join('\n')+'\n');
  await run('/usr/bin/tar',['-czf',join(output,title+'.tgz'),'--format','ustar','-C',payload,'dist','package.json','package-lock.json','release-manifest.json','SHA256SUMS']);
  copy(join(payload,'release-manifest.json'),join(output,title+'.json'));copy(join(payload,'SHA256SUMS'),join(output,title+'.sha256'));

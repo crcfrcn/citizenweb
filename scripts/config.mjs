@@ -37,6 +37,8 @@ export function describeConfiguration(){return JSON.parse(JSON.stringify(manifes
 
 // 本产品Workflow坐标声明。
 export const workflows=Object.freeze({"web":"web.yml"});
+export const constitutionTools=Object.freeze({rust:'1.97.1',bindgen:'0.2.127'});
+export const constitutionFiles=Object.freeze(['_routes.json','_worker.js/index.js','_worker.js/index_bg.wasm']);
 
 // 只返回声明数据；派发与观察归通用调用方，版本及交付归本仓YAML。
 export function describeAction({flow,platform,inputs={}}){

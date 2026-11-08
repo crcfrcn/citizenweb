@@ -6,6 +6,7 @@ import {mkdirSync,mkdtempSync,writeFileSync,readFileSync,rmSync,readdirSync,lsta
 import {mkdir,mkdtemp,rm,writeFile,realpath,lstat,readFile} from 'node:fs/promises';
 import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {constitutionFiles,constitutionTools} from './config.mjs';
 
 const repository='crcfrcn/citizenweb',workflow='.github/workflows/web.yml';
 // 正式附件是产品公开交付格式；发布独立读取，不导入编译入口或配置执行函数。
@@ -64,9 +65,10 @@ export function inspectPackage(bytes,manifestBytes,sumsBytes,version,sourceSHA){
  try{manifest=JSON.parse(manifestBytes);marker=JSON.parse(files.get('dist/citizenweb-release.json'));source=JSON.parse(files.get('package.json'));lock=JSON.parse(files.get('package-lock.json'));}catch{fail('正式包JSON无效');}
  if(!exact(manifest,['product_id','delivery_channel','software_version','git_commit_sha','tools','assets_sha256','files'])
    ||manifest.product_id!=='citizenweb'||manifest.delivery_channel!=='web'||manifest.software_version!==version||manifest.git_commit_sha!==sourceSHA
-   ||!exact(manifest.tools,['node','npm','vite','wrangler'])||Object.values(manifest.tools).some(value=>typeof value!=='string'||!value)
+   ||!exact(manifest.tools,['node','npm','vite','wrangler','rust','bindgen'])||Object.values(manifest.tools).some(value=>typeof value!=='string'||!value)
+   ||manifest.tools.rust!==constitutionTools.rust||manifest.tools.bindgen!==constitutionTools.bindgen
    ||!sha(manifest.assets_sha256)||!Array.isArray(manifest.files)||manifest.files.length<4)fail('正式清单身份无效');
- const required=['package.json','package-lock.json','dist/index.html','dist/citizenweb-release.json'],seen=new Set(),assets=[];
+ const required=['package.json','package-lock.json','dist/index.html','dist/citizenweb-release.json',...constitutionFiles.map(name=>'dist/'+name)],seen=new Set(),assets=[];
  for(const row of manifest.files){
   if(!exact(row,['path','sha256'])||typeof row.path!=='string'||!row.path.match(/^(?:package(?:-lock)?\.json|dist\/[A-Za-z0-9._/-]+)$/u)
    ||row.path.split('/').some(part=>!part||part==='.'||part==='..')||seen.has(row.path)||!sha(row.sha256)||digest(files.get(row.path)||Buffer.alloc(0))!==row.sha256)fail('正式包成员无效');
@@ -223,7 +225,7 @@ export async function deployPages(payload,credentials,{signal,invoke=runTool,req
   if(total>256*1024**2||digest(bytes)!==row.sha256)fail('Pages正式成员与清单不一致');
   if(row.path.startsWith('dist/')&&row.path!=='dist/citizenweb-release.json')assets.push(row);
  }
- if(!seen.has('dist/index.html')||!seen.has('dist/citizenweb-release.json')||digest(Buffer.from(stable(assets)))!==manifest.assets_sha256)fail('Pages正式页面不完整');
+ if(!seen.has('dist/index.html')||!seen.has('dist/citizenweb-release.json')||!constitutionFiles.every(name=>seen.has('dist/'+name))||digest(Buffer.from(stable(assets)))!==manifest.assets_sha256)fail('Pages正式页面不完整');
  const wrangler=join(work,'node_modules/wrangler/bin/wrangler.js');await publicationFile(work,'node_modules/wrangler/bin/wrangler.js');
  if((await invoke(node,['--version'],work,environment,signal)).trim()!=='v25.2.1'
   ||!(await invoke(node,[wrangler,'--version'],work,environment,signal)).includes('4.121.0'))fail('Pages执行工具不符合产品锁');

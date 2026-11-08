@@ -4,6 +4,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,symlinkSync,chmo
 import {execFileSync} from 'node:child_process';
 import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {constitutionFiles,constitutionTools} from '../scripts/config.mjs';
 import {inspectPackage,releaseNames,preparePublication,preparePublish,publishPages,deployPages,approvalPayload,prepareApproval,publishApproval} from '../scripts/publish.mjs';
 import {createHash} from 'node:crypto';
 import {Readable} from 'node:stream';
@@ -34,11 +35,12 @@ const stable=value=>Array.isArray(value)?`[${value.map(stable).join(',')}]`:valu
    ['package-lock.json',Buffer.from(JSON.stringify({version,packages:{'':{version},'node_modules/wrangler':{version:'4.121.0'}}}))],
    ['dist/index.html',Buffer.from('<html>synthetic</html>')],['dist/app.js',Buffer.from('synthetic')],
    ['dist/assets/Whitepaper.js',Buffer.from('synthetic-whitepaper')]]);
+  for(const name of constitutionFiles)fileBytes.set('dist/'+name,Buffer.from('synthetic'));
   const assets=[...fileBytes].filter(([path])=>path.startsWith('dist/')).map(([path,bytes])=>({path,sha256:digest(bytes)})).sort((a,b)=>a.path.localeCompare(b.path));
   const assets_sha256=digest(Buffer.from(stable(assets)));
   fileBytes.set('dist/citizenweb-release.json',Buffer.from(JSON.stringify({product_id:'citizenweb',delivery_channel:'web',software_version:version,git_commit_sha:source,assets_sha256})));
   const entries=[...fileBytes].map(([path,bytes])=>({path,sha256:digest(bytes)})).sort((a,b)=>a.path.localeCompare(b.path));
-  const manifest=Buffer.from(JSON.stringify({product_id:'citizenweb',delivery_channel:'web',software_version:version,git_commit_sha:source,tools:{node:'25.2.1',npm:'11',vite:'8',wrangler:'4'},assets_sha256,files:entries,...manifestFields}));
+  const manifest=Buffer.from(JSON.stringify({product_id:'citizenweb',delivery_channel:'web',software_version:version,git_commit_sha:source,tools:{node:'25.2.1',npm:'11',vite:'8',wrangler:'4',...constitutionTools},assets_sha256,files:entries,...manifestFields}));
   fileBytes.set('release-manifest.json',manifest);
   const sums=Buffer.from([...entries,{path:'release-manifest.json',sha256:digest(manifest)}].sort((a,b)=>a.path.localeCompare(b.path)).map(row=>row.sha256+'  '+row.path).join('\n')+'\n');fileBytes.set('SHA256SUMS',sums);
   const base=fileURLToPath(new URL('../target/test/',import.meta.url));mkdirSync(base,{recursive:true});const work=mkdtempSync(join(base,'release-fixture-')),payload=join(work,'files');mkdirSync(payload);

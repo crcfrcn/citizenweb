@@ -1,8 +1,5 @@
 import { useEffect, useState } from 'react'
 
-const rpcUrl = 'https://nrcrpc.crcfrcn.com/'
-const requestId = 'citizenweb-constitution'
-
 interface ConstitutionDocument {
   html: string
   blake2_256: string
@@ -11,15 +8,7 @@ interface ConstitutionDocument {
 
 function decodeDocument(value: unknown): ConstitutionDocument {
   if (!value || typeof value !== 'object') throw new Error('宪法响应格式异常')
-  const response = value as Record<string, unknown>
-  if (response.jsonrpc !== '2.0' || response.id !== requestId) {
-    throw new Error('宪法 RPC 响应异常')
-  }
-  if (response.error) throw new Error('暂时无法读取公民宪法，请稍后重试')
-  if (!response.result || typeof response.result !== 'object') {
-    throw new Error('宪法响应缺少正文')
-  }
-  const document = response.result as Record<string, unknown>
+  const document = value as Record<string, unknown>
   if (typeof document.html !== 'string' || !document.html.trim()
     || typeof document.blake2_256 !== 'string' || !/^0x[0-9a-f]{64}$/.test(document.blake2_256)
     || document.source !== 'legislation-raw') {
@@ -40,21 +29,18 @@ export default function Constitution() {
       controller.abort(new DOMException('公民宪法读取超时，请重试', 'TimeoutError'))
     }, 15_000)
     void (async () => {
-      const response = await fetch(rpcUrl, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        credentials: 'omit',
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: requestId,
-          method: 'constitution_getDocument',
-          params: [],
-        }),
-        signal: controller.signal,
-      })
-      if (response.status === 429) throw new Error('读取过于频繁，请稍后重试')
-      if (!response.ok) throw new Error('公民宪法读取失败，请稍后重试')
-      return decodeDocument(await response.json())
+      for (let attempt = 0; ; attempt++) {
+        const response = await fetch('/constitution/data', {
+          credentials: 'omit',
+          signal: controller.signal,
+        })
+        if (response.status === 503 && response.headers.get('retry-after') === '2' && attempt < 5) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 2000))
+          continue
+        }
+        if (!response.ok) throw new Error('公民宪法读取失败，请稍后重试')
+        return decodeDocument(await response.json())
+      }
     })()
       .then((document) => {
         if (!cancelled) setDoc(document)

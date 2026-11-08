@@ -18,6 +18,16 @@ CitizenWeb 涉及聊天时只作为依赖使用方；本条不代表尚未接入
 
 链节点不再内置白皮书副本；官网静态正文与官网页面由同一次源码构建生成，节点运行时读取最新已部署内容。白皮书源码检查继续覆盖中英文内容。
 
+## 公民宪法读取
+
+官网前端源码归 `frontend/`。`/constitution` 页面只请求同源 `GET /constitution/data`。Pages 仅在该接口运行 `constitution` Rust 包，源码归 `constitution/src/`，使用 Rust 1.97.1 和 wasm-bindgen 0.2.127。构建生成 `dist/_worker.js/index.js`、`dist/_worker.js/index_bg.wasm`、`dist/_routes.json`，随官网正式包一起校验和交付。
+
+官网专用 R2 桶绑定为 `CACHE`，只使用 `constitution` 一个固定键保存最新共享正文。包括同一公网 IP 下多台电脑在内的所有访客都可读这份公开正文。缓存有效期 24 小时，命中只读 R2 一次，不查链。过期时条件写入短时占位，胜出请求查链并替换同一键。其他请求等待刷新后重试，上游失败则按占位 ETag 释放。正文中记录刷新时间，使每次刷新具有不同 ETag。
+
+刷新使用官网自己的 Cloudflare Access 服务令牌向 `https://chain.crcfrcn.com/` 发送一个固定批次，执行 `chain_getBlockHash(0)` 和 `constitution_getDocument`。Pages 运行环境提供 `CFACCESS_CLIENTID`、`CHAIN_SECRET` 和 `CHAIN_GENESISHASH`，密钥仅保存在运行环境。公民服务端不参与这条链路。
+
+浏览器按共享缓存的剩余有效期保存正文，缓存命中不发请求，避免叠加第二个 24 小时窗口。首次或到期刷新成功需要一次 R2 读、两次条件写和一次 HTTPS 回源。修宪无需重新发布官网。
+
 ## 当前编译与自动化合同
 
 scripts/config.mjs仅声明控制台所需的CLOUDFLARE_ACCOUNT、PAGES_DEPLOY和COLDSIGN_PUBLICKEY配置需求；不计算版本、不访问GitHub、不启动进程、不生成文件。scripts/build.mjs拥有本产品入口，独立CLI与控制台调用同一实现；导入不执行命令。控制台不拥有产品依赖或流程，不导入其私有宿主模块。
@@ -41,7 +51,7 @@ scripts/config.mjs仅声明控制台所需的CLOUDFLARE_ACCOUNT、PAGES_DEPLOY�
 已有正式归档的读取、格式识别或解包工具失败沿用“正式归档解压失败”错误类别；路径、重复成员、链接、类型及大小约束仍独立校验。test/release.test.mjs中的原解压失败断言保持不变，不放宽检查来消除失败。该逻辑只处理发布前读取已有正式包，不参与编译或归档创建。
 工具退出回执先保留原工具失败及诊断，再以系统ps只读获取PID/PGID表；只在有效快照包含调用进程、且本轮进程组已空时允许收尾。查询错误、无效或不完整快照、后代未退出均明确失败并附本轮PID/PGID、保留现场。现有Node内置Mock回归保留原失败/EPERM/留场断言，另验证无效快照和真实同组后代完成，不新增框架、接口或控制台改动。
 
-ESLint与TypeScript无输出检查唯一归test阶段，build阶段仅执行官方Vite生产构建及白皮书交付，不重复静态检查。测试、编译各自独立现场仍分别按原锁npm ci，不新增共享现场或框架。官网缓存只准备npm，不创建Rust、Pub或Gradle目录；工作流缓存键只声明本产品Node与npm锁，清理只处理本轮现场，不处理钱包钥匙串或描述文件。现有依赖均有实际用途，本次不删除依赖或改动发布入口。
+ESLint 与 TypeScript 检查归 test 阶段，test 还运行 Rust 单测及实际 Wasm 接口回归。build 运行 Vite 生产构建、白皮书交付及宪法 Pages 产物编译，不重复静态检查。测试和编译各自使用独立现场，npm 和 Cargo 分别按产品锁文件执行。工作流缓存键同时包含 npm 锁和宪法 Cargo 锁，Rust 与 wasm-bindgen 复用已交付版本，清理只处理本轮现场。
 
 控制台通过scripts/config.mjs读取测试、编译与塔塔自动化声明；测试和编译仍由build.mjs执行，GitHub流程归本仓YAML；独立发布调用publish.mjs的prepare/publish命令。prepare只验真已有成功包并读取当前生产部署，原生冷签批准后publish才消费同一proof及previousID，通过官方Wrangler部署并回读；配置文件不转导出动作，发布不调用编译。
 
