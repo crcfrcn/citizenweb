@@ -6,7 +6,8 @@ use std::borrow::Cow;
 
 const DAY: u64 = 86_400_000;
 const LEASE: u64 = 30_000;
-const LIMIT: usize = 1024 * 1024;
+// 对齐公民链锁定 SDK 的默认 RPC 响应上限。
+const LIMIT: usize = 15 * 1024 * 1024;
 
 fn cache_age(uploaded: u64, now: u64) -> Option<u64> {
     let remaining = uploaded.saturating_add(DAY).checked_sub(now)?;
@@ -274,15 +275,21 @@ mod pages {
             }
             return empty(503, Some(2));
         };
+        // 同一 R2 键两次成功写入至少间隔一秒，回源时间计入间隔。
+        let next_write = now().saturating_add(1000);
         let bytes = chain(&global, env).await;
         let result = bytes
             .as_ref()
             .ok()
             .and_then(|bytes| document(bytes, &genesis));
         let Some(result) = result.and_then(|value| value.strip_prefix('{')) else {
-            let _ = write(&bucket, &[], Some(&lease)).await;
+            // 保留短时占位，避免故障期间反复回源。
             return empty(503, None);
         };
+        let delay = next_write.saturating_sub(now());
+        if delay > 0 {
+            call(&get(global.as_ref(), "scheduler")?, "wait", &[(delay as f64).into()]).await?;
+        }
         // 缓存时间让同一版正文每次刷新也有新 ETag，旧请求不能覆盖新缓存。
         let body = format!("{{\"cached_at\":{},{}", now(), result);
         if write(&bucket, body.as_bytes(), Some(&lease))

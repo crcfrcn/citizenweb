@@ -118,10 +118,7 @@ jobs:
             cargo +"$RUST_VERSION" fetch --locked --manifest-path constitution/Cargo.toml
       - name: 真实代码回归与严格分析
         run: |
-          node scripts/build.mjs test "$PLATFORM"
-      - name: 编译本平台正式产物
-        run: |
-          node scripts/build.mjs build "$PLATFORM"
+          node scripts/build.mjs build "$PLATFORM" --verify
       - name: 装配并核对正式附件
         run: |
           node scripts/build.mjs package "$PLATFORM"

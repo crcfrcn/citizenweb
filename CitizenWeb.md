@@ -18,13 +18,17 @@ CitizenWeb 涉及聊天时只作为依赖使用方；本条不代表尚未接入
 
 链节点不再内置白皮书副本；官网静态正文与官网页面由同一次源码构建生成，节点运行时读取最新已部署内容。白皮书源码检查继续覆盖中英文内容。
 
+## 公民链节点下载
+
+「生态系统」页的公民链卡片按所选平台从公民链 GitHub Release 列表取发布时间最新的正式版，并直接打开该版安装包的 GitHub 下载地址。若最新正式版的安装包不可用，显示错误。
+
 ## 公民宪法读取
 
 官网前端源码归 `frontend/`。`/constitution` 页面只请求同源 `GET /constitution/data`。Pages 仅在该接口运行 `constitution` Rust 包，源码归 `constitution/src/`，使用 Rust 1.97.1 和 wasm-bindgen 0.2.127。构建生成 `dist/_worker.js/index.js`、`dist/_worker.js/index_bg.wasm`、`dist/_routes.json`，随官网正式包一起校验和交付。
 
-官网专用 R2 桶绑定为 `CACHE`，只使用 `constitution` 一个固定键保存最新共享正文。包括同一公网 IP 下多台电脑在内的所有访客都可读这份公开正文。缓存有效期 24 小时，命中只读 R2 一次，不查链。过期时条件写入短时占位，胜出请求查链并替换同一键。其他请求等待刷新后重试，上游失败则按占位 ETag 释放。正文中记录刷新时间，使每次刷新具有不同 ETag。
+官网专用 R2 桶绑定为 `CACHE`，只使用 `constitution` 一个固定键保存最新共享正文。包括同一公网 IP 下多台电脑在内的所有访客都可读这份公开正文。缓存有效期 24 小时，命中只读 R2 一次，不查链。过期时条件写入短时占位，胜出请求查链并替换同一键。其他请求等待刷新后重试，正文写入与占位写成功至少间隔一秒，回源耗时计入间隔。上游失败时保留占位至 30 秒到期。正文中记录刷新时间，使每次刷新具有不同 ETag。
 
-刷新使用官网自己的 Cloudflare Access 服务令牌向 `https://chain.crcfrcn.com/` 发送一个固定批次，执行 `chain_getBlockHash(0)` 和 `constitution_getDocument`。Pages 运行环境提供 `CFACCESS_CLIENTID`、`CHAIN_SECRET` 和 `CHAIN_GENESISHASH`，密钥仅保存在运行环境。公民服务端不参与这条链路。
+刷新使用官网自己的 Cloudflare Access 服务令牌向 `https://chain.crcfrcn.com/` 发送一个固定批次，执行 `chain_getBlockHash(0)` 和 `constitution_getDocument`。Pages 运行环境提供 `CFACCESS_CLIENTID`、`CHAIN_SECRET` 和 `CHAIN_GENESISHASH`，密钥仅保存在运行环境。官网按公民链锁定 SDK 的默认 RPC 响应上限流式读取最多 15 MiB，超限立即取消读取。
 
 浏览器按共享缓存的剩余有效期保存正文，缓存命中不发请求，避免叠加第二个 24 小时窗口。首次或到期刷新成功需要一次 R2 读、两次条件写和一次 HTTPS 回源。修宪无需重新发布官网。
 
@@ -34,7 +38,7 @@ scripts/config.mjs仅声明控制台所需的CLOUDFLARE_ACCOUNT、PAGES_DEPLOY�
 
 本机与GitHub均沿原始依赖锁执行，缺缓存按原锁正常取得；真实下载、测试、编译、签名或验收失败必须失败。官方缓存只存可再生依赖与编译状态，不含签名材料；恢复/保存故障不阻塞。每轮现场归target/test或target/build的唯一目录，缓存原子领取且不等待，取消等待本轮进程组退出后清理；无法确认退出则保留现场并明确失败。
 
-产品命令：node scripts/build.mjs test <平台>、build <平台>、candidate <平台>、automate <平台>、cleanup <平台>。自动化按准确main提交和平台Workflow执行，派发前检查活动Run，官方派发回执直接提供Run ID；不确定不补发。控制台恢复只观察原Run，产品cleanup命令独立执行历史收尾。成功版本补丁加一，失败不加。自动化候选版本仅存在本轮派生工程与产物，不回写产品版本和依赖锁。
+产品命令：node scripts/build.mjs test <平台>、build <平台>、package <平台>、dev <平台>。build 可传入 --verify 验证同一份构建产物。自动化按准确main提交和平台Workflow执行，派发前检查活动Run，官方派发回执直接提供Run ID；不确定不补发。控制台恢复只观察原Run，工作流负责历史收尾。成功版本补丁加一，失败不加。自动化候选版本仅存在本轮派生工程与产物，不回写产品版本和依赖锁。
 
 固定Workflow为产品·平台；Run、Job、Artifact、正式Tag、Release及附件显示标签为产品·平台·vX.Y.Z，必要文件扩展名保留。Release创建时使用官方--target显式交付本轮准确提交SHA。Workflow创建准确源码Tag，正式附件先逐个下载比较再确认正式Release；清理按本产品平台最新成功和非成功终态各留一条，活动任务保留，删除后回查。淘汰旧成功前必须确认新正式Release/Tag与Artifact；不按界面隐藏代替实际删除。
 
@@ -51,7 +55,7 @@ scripts/config.mjs仅声明控制台所需的CLOUDFLARE_ACCOUNT、PAGES_DEPLOY�
 已有正式归档的读取、格式识别或解包工具失败沿用“正式归档解压失败”错误类别；路径、重复成员、链接、类型及大小约束仍独立校验。test/release.test.mjs中的原解压失败断言保持不变，不放宽检查来消除失败。该逻辑只处理发布前读取已有正式包，不参与编译或归档创建。
 工具退出回执先保留原工具失败及诊断，再以系统ps只读获取PID/PGID表；只在有效快照包含调用进程、且本轮进程组已空时允许收尾。查询错误、无效或不完整快照、后代未退出均明确失败并附本轮PID/PGID、保留现场。现有Node内置Mock回归保留原失败/EPERM/留场断言，另验证无效快照和真实同组后代完成，不新增框架、接口或控制台改动。
 
-ESLint 与 TypeScript 检查归 test 阶段，test 还运行 Rust 单测及实际 Wasm 接口回归。build 运行 Vite 生产构建、白皮书交付及宪法 Pages 产物编译，不重复静态检查。测试和编译各自使用独立现场，npm 和 Cargo 分别按产品锁文件执行。工作流缓存键包含 npm 锁和宪法 Cargo 锁。远程构建先复用锁定的 Rust、Wasm 目标、wasm-bindgen 和 Cargo 缓存，缺件时从 Rust 官方渠道、wasm-bindgen 官方发布及 Cargo 原锁指定的来源补齐。Cargo 测试和构建保持离线，清理只处理本轮现场。
+test 和 build --verify 共用构建实现，在同一现场安装一次 npm 依赖并编译一次 Wasm。完整验证包含 Node、ESLint、TypeScript、Rust 和实际 Wasm 回归。锁定的 Wrangler 装配正式 dist，运行时回归加载上传包内的 JS 和 Wasm，通过隔离的 R2 与静态资产绑定验证宪法接口及静态入口。自动化直接归档通过验证的 dist。工作流缓存键包含 npm 锁和宪法 Cargo 锁。远程构建优先复用锁定的 Rust、Wasm 目标、wasm-bindgen 和 Cargo 缓存。Cargo 测试和构建保持离线。
 
 控制台通过scripts/config.mjs读取测试、编译与塔塔自动化声明；测试和编译仍由build.mjs执行，GitHub流程归本仓YAML；独立发布调用publish.mjs的prepare/publish命令。prepare只验真已有成功包并读取当前生产部署，原生冷签批准后publish才消费同一proof及previousID，通过官方Wrangler部署并回读；配置文件不转导出动作，发布不调用编译。
 

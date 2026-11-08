@@ -26,5 +26,9 @@ fn only_returns_a_document_from_the_expected_chain() {
     assert!(document(&bytes, "wrong-chain").is_none());
     batch[0]["result"]["source"] = json!("fixture");
     assert!(document(&serde_json::to_vec(&batch).unwrap(), &digest).is_none());
-    assert!(document(&vec![b' '; LIMIT + 1], &digest).is_none());
+    let mut boundary = bytes;
+    boundary.resize(LIMIT, b' ');
+    assert!(document(&boundary, &digest).is_some());
+    boundary.push(b' ');
+    assert!(document(&boundary, &digest).is_none());
 }

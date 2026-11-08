@@ -122,30 +122,35 @@ export default {fetch: fetchWorker};
  put(join(output,'_routes.json'),JSON.stringify({version:1,include:['/constitution/data'],exclude:[]})+'\n');
 }
 export async function testProduct(){
- nodeCheck();await run(process.execPath,['--test','test/build.test.mjs','test/release.test.mjs'],{cwd:root});
- const work=task('test','web'),cache=claimCache(work);let safe=true;
- try{
-  const env={...webEnvironment(work,cache),...rustEnvironment(work)},project=await prepareWeb(work,env);
-  await webChecks(project,env);
-  await run('cargo',['test','--offline','--locked','--manifest-path','constitution/Cargo.toml'],{cwd:project,env});
-  const output=join(work,'dist');
-  await buildConstitution(project,env,output);
-  await run(process.execPath,['--test','--test-name-pattern','^宪法 Worker','test/build.test.mjs'],
-   {cwd:project,env:{...env,CONSTITUTION_OUTPUT:output}});
-  return {tests:true};
- }
- catch(error){safe=!error.keepWork;throw error;}finally{if(safe){cache.release();rmSync(work,{recursive:true,force:true});}}
+ await buildWeb(true,true);return {tests:true};
 }
-export async function buildProduct(){
- nodeCheck();const supplied=process.env.PRODUCT_WORK;if(supplied&&!insideTarget(supplied))throw Error('官网编译现场不属于target');
- const work=supplied?directory(supplied):task('build','web'),cache=claimCache(work);let complete=false,safe=true;
+export async function buildProduct(verify=false){
+ return buildWeb(verify,false);
+}
+async function buildWeb(verify,test){
+ nodeCheck();const supplied=test?undefined:process.env.PRODUCT_WORK;
+ if(supplied&&!insideTarget(supplied))throw Error('官网编译现场不属于target');
+ const work=supplied?directory(supplied):task(test?'test':'build','web'),cache=claimCache(work);let complete=false,safe=true;
  try{
-  // 静态检查唯一归test阶段，编译仅由官方Vite执行。
   const env={...webEnvironment(work,cache),...rustEnvironment(work)},project=await prepareWeb(work,env),dist=join(work,'dist');
+  if(verify){
+   await run(process.execPath,['--test','test/build.test.mjs','test/release.test.mjs'],{cwd:project,env});
+   await webChecks(project,env);
+   await run('cargo',['test','--offline','--locked','--manifest-path','constitution/Cargo.toml'],{cwd:project,env});
+  }
   await run('npm',['exec','--no','--','vite','build','--config','config/vite.config.ts','--outDir',dist],{cwd:project,env});
   put(join(dist,'whitepaper/content.json'),whitepaperContent(readFileSync(join(project,'frontend/whitepaper.md'),'utf8'),name=>readFileSync(join(project,'frontend/assets',name))));
   await buildConstitution(project,env,dist);
-  if(!lstatSync(join(dist,'index.html')).isFile())throw Error('官网入口未生成');complete=true;return {work,output:dist};
+  if(!lstatSync(join(dist,'index.html')).isFile())throw Error('官网入口未生成');
+  // 用锁定 Wrangler 装配同一个 dist，临时上传包只用于本轮运行时回归。
+  if(verify){
+   const bundle=join(work,'pages.bundle');
+   await run(process.execPath,[join(project,'node_modules/wrangler/bin/wrangler.js'),'pages','functions','build',
+    '--build-output-directory',dist,'--outfile',bundle],{cwd:project,env});
+   await run(process.execPath,['--test','--test-name-pattern','^宪法 Worker','test/build.test.mjs'],
+    {cwd:project,env:{...env,CONSTITUTION_OUTPUT:dist,PAGES_BUNDLE:bundle}});
+  }
+  complete=!test;return {work,output:dist};
  }catch(error){safe=!error.keepWork;throw error;}finally{if(safe){cache.release();if(!complete)rmSync(work,{recursive:true,force:true});}}
 }
 const stable=value=>Array.isArray(value)?'['+value.map(stable).join(',')+']':value&&typeof value==='object'?'{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+stable(value[key])).join(',')+'}':JSON.stringify(value);
@@ -179,8 +184,8 @@ async function development(){
  await server.listen();server.printUrls();controller.signal.addEventListener('abort',()=>void server.close(),{once:true});return new Promise(done=>server.httpServer.once('close',done));
 }
 async function main(){
- const [command,platform='web',...extra]=process.argv.slice(2);if(extra.length||platform!=='web')throw Error('官网参数无效');
- if(command==='test')return testProduct();if(command==='build')return buildProduct();if(command==='package')return packageProduct();if(command==='dev')return development();
+ const [command,platform='web',...extra]=process.argv.slice(2);if(platform!=='web'||(extra.length&&(command!=='build'||extra.length!==1||extra[0]!=='--verify')))throw Error('官网参数无效');
+ if(command==='test')return testProduct();if(command==='build')return buildProduct(extra[0]==='--verify');if(command==='package')return packageProduct();if(command==='dev')return development();
  throw Error('未知官网命令');
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)&&!process.env.NODE_TEST_CONTEXT){

@@ -1,12 +1,44 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {stripTypeScriptTypes} from 'node:module';
 import {mkdtempSync,mkdirSync,cpSync,readFileSync,rmSync,existsSync,readdirSync,writeFileSync,chmodSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {root,displayName,run} from '../scripts/build.mjs';
 import {constitutionFiles,constitutionTools,describeAction} from '../scripts/config.mjs';
 import {initialVersion,platforms,repository} from '../scripts/build.mjs';
 const platform=Object.keys(platforms)[0];
+test('公民链下载按所选平台取最新正式包',async()=>{
+ const source=readFileSync(join(root,'frontend/components/DownloadButton.tsx'),'utf8');
+ // 只装载组件中的下载逻辑，Node 回归无需启动 React 或下载安装包。
+ const resolver=source.slice(source.indexOf('export type CitizenChainPlatform'),source.indexOf('interface DownloadButtonProps'));
+ const script=stripTypeScriptTypes(resolver+'\nexport {resolveCitizenChainDownload};');
+ const {resolveCitizenChainDownload}=await import('data:text/javascript;base64,'+Buffer.from(script).toString('base64'));
+ function release(stem,extension,version,published_at){
+  const tag_name=`公民链·${stem}·v${version}`,name=`citizenchain-${stem}-v${version}.${extension}`;
+  return {tag_name,published_at,draft:false,prerelease:false,assets:[{name,state:'uploaded',
+   browser_download_url:`https://github.com/crcfrcn/citizenchain/releases/download/${encodeURIComponent(tag_name)}/${name}`}]};
+ }
+ const targets=[['macos','macOS','dmg'],['windows','Windows','exe'],['linux-arm','LinuxARM','deb'],['linux-amd','LinuxAMD','deb']];
+ const latest=targets.map(([,stem,extension])=>release(stem,extension,'1.0.2','2026-11-01'));
+ const older=release('macOS','dmg','1.0.1','2026-10-01');
+ const preview={...release('macOS','dmg','1.0.3','2026-11-02'),prerelease:true};
+ const draft={...release('macOS','dmg','1.0.4','2026-11-03'),draft:true};
+ const list=[preview,draft,older,...latest];
+ for(const [index,[target]] of targets.entries()){
+  let calls=0;
+  const url=await resolveCitizenChainDownload(target,async endpoint=>{
+   calls++;
+   assert.equal(endpoint,'https://api.github.com/repos/crcfrcn/citizenchain/releases?per_page=100&page=1');
+   return Response.json(list);
+  });
+  assert.equal(calls,1);
+  assert.equal(url,latest[index].assets[0].browser_download_url);
+ }
+ await assert.rejects(resolveCitizenChainDownload('macos',async()=>Response.json([
+  older,{...latest[0],assets:[]},
+ ])),/最新正式版的安装包不可用/u);
+});
 if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多台电脑共享正文',async t=>{
  const dist=process.env.CONSTITUTION_OUTPUT;
  assert.deepEqual(JSON.parse(readFileSync(join(dist,'_routes.json'))),{version:1,include:['/constitution/data'],exclude:[]});
@@ -18,6 +50,9 @@ if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多�
  const records=new Map(),calls={get:0,put:0,origin:0};
  let now=2_000_000,failed=false;
  t.mock.method(Date,'now',()=>now);
+ const scheduler=Object.getOwnPropertyDescriptor(globalThis,'scheduler');
+ Object.defineProperty(globalThis,'scheduler',{configurable:true,value:{async wait(delay){now+=delay;}}});
+ t.after(()=>{if(scheduler)Object.defineProperty(globalThis,'scheduler',scheduler);else delete globalThis.scheduler;});
  const digest='0x'+'1'.repeat(64),body={html:'<h1>宪法</h1>',blake2_256:digest,source:'legislation-raw'};
  t.mock.method(globalThis,'fetch',async request=>{
   calls.origin++;
@@ -44,6 +79,7 @@ if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多�
     calls.put++;assert.equal(key,'constitution');
     const current=records.get(key);
     if(onlyIf.etagDoesNotMatch==='*'?current:onlyIf.etagMatches!==current?.etag)return null;
+    if(current&&now-current.uploaded.getTime()<1000)throw Error('R2 429');
     const row={etag:createHash('sha256').update(bytes).digest('hex'),bytes:Uint8Array.from(bytes),uploaded:new Date(now)};
     records.set(key,row);
     return {etag:row.etag};
@@ -89,8 +125,43 @@ if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多�
  failed=true;
  assert.equal((await fetch('192.0.2.2')).status,503);
  failed=false;
+ const duringFailure={...calls};
+ assert.equal((await fetch('192.0.2.1')).status,503);
+ now+=29_999;
+ assert.equal((await fetch('192.0.2.2')).status,503);
+ assert.deepEqual(calls,{...duringFailure,get:duringFailure.get+2});
+ now++;
  assert.equal((await fetch('192.0.2.2')).status,200);
  assert.equal(calls.origin,4);
+});
+if(process.env.PAGES_BUNDLE)test('宪法 Worker 在 Wrangler 装配的 Pages 包中运行',async t=>{
+ const dist=process.env.CONSTITUTION_OUTPUT;
+ const bytes=readFileSync(process.env.PAGES_BUNDLE);
+ const boundary=bytes.toString('ascii',2,bytes.indexOf('\r\n'));
+ const parts=await new Response(bytes,{headers:{'content-type':'multipart/form-data; boundary='+boundary}}).formData();
+ const {main_module:entry}=JSON.parse(parts.get('metadata'));
+ const wasm=[...parts.keys()].find(name=>name.endsWith('.wasm'));
+ const contents=Buffer.from(await parts.get(wasm).arrayBuffer());
+ assert.deepEqual(contents,readFileSync(join(dist,'_worker.js/index_bg.wasm')));
+ // 运行上传包内原样的 JS 和 Wasm，R2 与静态资产在本轮现场隔离。
+ const {Miniflare}=await import('miniflare');
+ const index=readFileSync(join(dist,'index.html'),'utf8');
+ const runtime=new Miniflare({host:'127.0.0.1',port:0,modulesRoot:dist,modules:[
+  {type:'ESModule',path:join(dist,entry),contents:await parts.get(entry).text()},
+  {type:'CompiledWasm',path:join(dist,wasm),contents},
+ ],r2Buckets:['CACHE'],serviceBindings:{ASSETS:()=>new Response(index)},outboundService:()=>new Response(null,{status:502})});
+ t.after(()=>runtime.dispose());
+ const body={html:'<h1>宪法</h1>',blake2_256:'0x'+'1'.repeat(64),source:'legislation-raw'};
+ const cache=await runtime.getR2Bucket('CACHE');
+ await cache.put('constitution',JSON.stringify(body));
+ const worker=await runtime.getWorker();
+ const url='https://www.crcfrcn.com/constitution/data';
+ const response=await worker.fetch(url);
+ assert.equal(response.status,200);
+ assert.match(response.headers.get('content-type'),/^application\/json/u);
+ assert.deepEqual(await response.json(),body);
+ assert.equal((await worker.fetch(url,{method:'POST'})).status,405);
+ assert.equal(await (await worker.fetch('https://www.crcfrcn.com/constitution')).text(),index);
 });
 test('配置仅声明和引用，导入不派发、不生成现场',async()=>{
  const config=await import('../scripts/config.mjs');assert.equal(config.describeConfiguration().schema,1);
