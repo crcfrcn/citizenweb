@@ -146,22 +146,46 @@ if(process.env.PAGES_BUNDLE)test('宪法 Worker 在 Wrangler 装配的 Pages 包
  // 运行上传包内原样的 JS 和 Wasm，R2 与静态资产在本轮现场隔离。
  const {Miniflare}=await import('miniflare');
  const index=readFileSync(join(dist,'index.html'),'utf8');
- const runtime=new Miniflare({host:'127.0.0.1',port:0,modulesRoot:dist,modules:[
-  {type:'ESModule',path:join(dist,entry),contents:await parts.get(entry).text()},
-  {type:'CompiledWasm',path:join(dist,wasm),contents},
- ],r2Buckets:['CACHE'],serviceBindings:{ASSETS:()=>new Response(index)},outboundService:()=>new Response(null,{status:502})});
+ const digest='0x'+'1'.repeat(64),body={html:'<h1>宪法</h1>',blake2_256:digest,source:'legislation-raw'};
+ let origin=0;
+ const runtime=new Miniflare({host:'127.0.0.1',port:0,cf:false,telemetry:{enabled:false},workers:[{
+  config:{
+   type:'worker',name:'pages',compatibilityDate:'2026-08-04',
+   manifest:{mainModule:entry,modulesRoot:dist,modules:{
+    [entry]:{type:'esm',contents:await parts.get(entry).text()},
+    [wasm]:{type:'wasm',contents},
+   }},
+   env:{
+    CACHE:{type:'r2',name:'constitution-test'},
+    ASSETS:{type:'fetcher',handler:()=>new Response(index)},
+    CHAIN_GENESISHASH:{type:'text',value:digest},
+    CFACCESS_CLIENTID:{type:'text',value:'fixture-client'},
+    CHAIN_SECRET:{type:'text',value:'fixture-token'},
+   },
+  },
+  // 从 HTTP 入口触发真实 R2 的冷缓存和命中，回源只由本轮夹具响应。
+  dev:{outboundService:{type:'fetcher',handler:async request=>{
+   origin++;
+   assert.equal(request.url,'https://chain.crcfrcn.com/');
+   assert.equal(request.method,'POST');
+   assert.equal(request.headers.get('cf-access-client-id'),'fixture-client');
+   assert.equal(request.headers.get('cf-access-client-secret'),'fixture-token');
+   return Response.json([{jsonrpc:'2.0',id:1,result:digest},{jsonrpc:'2.0',id:2,result:body}]);
+  }}},
+ }]});
  t.after(()=>runtime.dispose());
- const body={html:'<h1>宪法</h1>',blake2_256:'0x'+'1'.repeat(64),source:'legislation-raw'};
- const cache=await runtime.getR2Bucket('CACHE');
- await cache.put('constitution',JSON.stringify(body));
- const worker=await runtime.getWorker();
  const url='https://www.crcfrcn.com/constitution/data';
- const response=await worker.fetch(url);
+ const request=(target,method='GET')=>runtime.dispatchFetch(target,{method,signal:AbortSignal.timeout(10_000)});
+ const response=await request(url);
  assert.equal(response.status,200);
  assert.match(response.headers.get('content-type'),/^application\/json/u);
- assert.deepEqual(await response.json(),body);
- assert.equal((await worker.fetch(url,{method:'POST'})).status,405);
- assert.equal(await (await worker.fetch('https://www.crcfrcn.com/constitution')).text(),index);
+ const {cached_at,...document}=await response.json();
+ assert.ok(Number.isSafeInteger(cached_at));
+ assert.deepEqual(document,body);
+ assert.deepEqual(await (await request(url)).json(),{cached_at,...body});
+ assert.equal(origin,1);
+ assert.equal((await request(url,'POST')).status,405);
+ assert.equal(await (await request('https://www.crcfrcn.com/constitution')).text(),index);
 });
 test('配置仅声明和引用，导入不派发、不生成现场',async()=>{
  const config=await import('../scripts/config.mjs');assert.equal(config.describeConfiguration().schema,1);
