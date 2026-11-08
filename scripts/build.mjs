@@ -114,8 +114,9 @@ async function buildConstitution(project,env,output){
   '--target','web','--out-dir',worker,'--out-name','index','--no-typescript','--remove-name-section','--remove-producers-section'],{cwd:project,env});
  const glue=readFileSync(module,'utf8'),initializer='export { initSync, __wbg_init as default };';
  if(!glue.includes(initializer))throw Error('宪法 WASM 缺少 Pages 初始化入口');
- put(module,glue.replace(initializer,`import wasm from "./index_bg.wasm";
-initSync({module: wasm});
+ // 生成的胶水已声明 wasm，静态导入使用独立名称。
+ put(module,glue.replace(initializer,`import constitutionWasm from "./index_bg.wasm";
+initSync({module: constitutionWasm});
 export default {fetch: fetchWorker};
 `));
  put(join(output,'_routes.json'),JSON.stringify({version:1,include:['/constitution/data'],exclude:[]})+'\n');

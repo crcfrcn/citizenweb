@@ -12,8 +12,8 @@ if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多�
  assert.deepEqual(JSON.parse(readFileSync(join(dist,'_routes.json'))),{version:1,include:['/constitution/data'],exclude:[]});
  const wasm=readFileSync(join(dist,'_worker.js/index_bg.wasm')).toString('base64');
  const entry=readFileSync(join(dist,'_worker.js/index.js'),'utf8').replace(
-  'import wasm from "./index_bg.wasm";',
-  `const wasm=new WebAssembly.Module(Uint8Array.from(atob('${wasm}'),char=>char.charCodeAt(0)));`);
+  'import constitutionWasm from "./index_bg.wasm";',
+  `const constitutionWasm=new WebAssembly.Module(Uint8Array.from(atob('${wasm}'),char=>char.charCodeAt(0)));`);
  const {default:worker}=await import('data:text/javascript;base64,'+Buffer.from(entry).toString('base64'));
  const records=new Map(),calls={get:0,put:0,origin:0};
  let now=2_000_000,failed=false;
