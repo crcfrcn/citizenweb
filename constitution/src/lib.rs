@@ -212,7 +212,8 @@ mod pages {
         init.set_method("POST");
         init.set_headers_headers(&headers);
         init.set_body(&QUERY.into());
-        init.set_redirect(RequestRedirect::Error);
+        // Workers 使用 manual 禁止跟随重定向，下面只接受 200。
+        init.set_redirect(RequestRedirect::Manual);
         init.set_signal(Some(&AbortSignal::timeout_with_u32(10_000)));
         let request = Request::new_with_str_and_init(NODE, &init)?;
         let response = JsFuture::from(global.fetch_with_request(&request))

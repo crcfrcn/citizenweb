@@ -48,7 +48,7 @@ if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多�
   `const constitutionWasm=new WebAssembly.Module(Uint8Array.from(atob('${wasm}'),char=>char.charCodeAt(0)));`);
  const {default:worker}=await import('data:text/javascript;base64,'+Buffer.from(entry).toString('base64'));
  const records=new Map(),calls={get:0,put:0,origin:0};
- let now=2_000_000,failed=false;
+ let now=2_000_000,upstreamStatus=200;
  t.mock.method(Date,'now',()=>now);
  const scheduler=Object.getOwnPropertyDescriptor(globalThis,'scheduler');
  Object.defineProperty(globalThis,'scheduler',{configurable:true,value:{async wait(delay){now+=delay;}}});
@@ -58,13 +58,13 @@ if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多�
   calls.origin++;
   assert.equal(request.url,'https://chain.crcfrcn.com/');
   assert.equal(request.method,'POST');
-  assert.equal(request.redirect,'error');
+  assert.equal(request.redirect,'manual');
   assert.equal(request.headers.get('cf-access-client-id'),'fixture-client');
   assert.equal(request.headers.get('cf-access-client-secret'),'fixture-token');
   assert.deepEqual(await request.json(),[
    {jsonrpc:'2.0',id:1,method:'chain_getBlockHash',params:[0]},
    {jsonrpc:'2.0',id:2,method:'constitution_getDocument',params:[]}]);
-  if(failed)return new Response(null,{status:502});
+  if(upstreamStatus!==200)return new Response(null,{status:upstreamStatus,headers:{location:'https://example.test/'}});
   return Response.json([{jsonrpc:'2.0',id:2,result:body},{jsonrpc:'2.0',id:1,result:digest}]);
  });
  const env={CHAIN_GENESISHASH:digest,CFACCESS_CLIENTID:'fixture-client',CHAIN_SECRET:'fixture-token',
@@ -122,9 +122,9 @@ if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多�
  assert.equal(calls.origin,2);
  assert.notEqual(records.get('constitution').etag,firstEtag);
  now+=86_400_000;
- failed=true;
+ upstreamStatus=502;
  assert.equal((await fetch('192.0.2.2')).status,503);
- failed=false;
+ upstreamStatus=200;
  const duringFailure={...calls};
  assert.equal((await fetch('192.0.2.1')).status,503);
  now+=29_999;
@@ -133,6 +133,10 @@ if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多�
  now++;
  assert.equal((await fetch('192.0.2.2')).status,200);
  assert.equal(calls.origin,4);
+ now+=86_400_000;
+ upstreamStatus=302;
+ assert.equal((await fetch('192.0.2.1')).status,503);
+ assert.equal(calls.origin,5);
 });
 if(process.env.PAGES_BUNDLE)test('宪法 Worker 在 Wrangler 装配的 Pages 包中运行',async t=>{
  const dist=process.env.CONSTITUTION_OUTPUT;

@@ -30,7 +30,7 @@ CitizenWeb 涉及聊天时只作为依赖使用方；本条不代表尚未接入
 
 刷新使用官网自己的 Cloudflare Access 服务令牌向 `https://chain.crcfrcn.com/` 发送一个固定批次，执行 `chain_getBlockHash(0)` 和 `constitution_getDocument`。Pages 运行环境提供 `CFACCESS_CLIENTID`、`CHAIN_SECRET` 和 `CHAIN_GENESISHASH`，密钥仅保存在运行环境。官网按公民链锁定 SDK 的默认 RPC 响应上限流式读取最多 15 MiB，超限立即取消读取。
 
-浏览器按共享缓存的剩余有效期保存正文，缓存命中不发请求，避免叠加第二个 24 小时窗口。首次或到期刷新成功需要一次 R2 读、两次条件写和一次 HTTPS 回源。修宪无需重新发布官网。
+回源请求使用 Workers 的手动重定向模式，只接受 HTTP 200。浏览器按共享缓存的剩余有效期保存正文，缓存命中不发请求，避免叠加第二个 24 小时窗口。首次或到期刷新成功需要一次 R2 读、两次条件写和一次 HTTPS 回源。修宪无需重新发布官网。
 
 ## 当前编译与自动化合同
 
