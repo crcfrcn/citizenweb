@@ -70,6 +70,10 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 25.2.1
+      - name: 读取宪法工具声明
+        id: constitution
+        run: |
+          node --input-type=module -e "import {constitutionTools} from './scripts/config.mjs'; for (const [name, version] of Object.entries(constitutionTools)) console.log(name+'='+version)" >> "$GITHUB_OUTPUT"
       - name: 恢复官方缓存
         id: cache
         uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
@@ -78,16 +82,40 @@ jobs:
         with:
           path: |
             target/cache
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+            ~/.rustup/toolchains/${{ steps.constitution.outputs.rust }}-aarch64-apple-darwin
           key: citizenweb-web-official-25.2.1-${{ hashFiles('package-lock.json', 'constitution/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: citizenweb-web-official-25.2.1-${{ hashFiles('package-lock.json', 'constitution/Cargo.lock') }}-
-      - name: 复用已交付的宪法工具
+      - name: 准备锁定的宪法工具
+        env:
+          RUST_VERSION: ${{ steps.constitution.outputs.rust }}
+          BINDGEN_VERSION: ${{ steps.constitution.outputs.bindgen }}
+          RUSTUP_AUTO_INSTALL: '0'
         run: |
           set -euo pipefail
-          rust="$(node --input-type=module -e "import {constitutionTools} from './scripts/config.mjs'; console.log(constitutionTools.rust)")"
-          RUSTUP_AUTO_INSTALL=0 rustup target list --installed --toolchain "$rust" | grep -Fx wasm32-unknown-unknown
-          if ! command -v wasm-bindgen >/dev/null && [ -x target/cache/worker/bin/wasm-bindgen ]; then
-            printf 'WASM_BINDGEN=%s/target/cache/worker/bin/wasm-bindgen\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          # 优先复用锁定工具；只补齐缺失的工具链、目标和依赖。
+          target=wasm32-unknown-unknown
+          if ! rustup run "$RUST_VERSION" rustc --version; then
+            rustup toolchain install "$RUST_VERSION" --profile minimal --target "$target"
+          elif ! rustup target list --installed --toolchain "$RUST_VERSION" | grep -Fx "$target"; then
+            rustup target add "$target" --toolchain "$RUST_VERSION"
           fi
+          bindgen="$(command -v wasm-bindgen || true)"
+          if [ -z "$bindgen" ] || [ "$("$bindgen" --version)" != "wasm-bindgen $BINDGEN_VERSION" ]; then
+            bin="$GITHUB_WORKSPACE/target/cache/worker/bin"
+            bindgen="$bin/wasm-bindgen"
+            if [ ! -x "$bindgen" ] || [ "$("$bindgen" --version)" != "wasm-bindgen $BINDGEN_VERSION" ]; then
+              archive="wasm-bindgen-$BINDGEN_VERSION-aarch64-apple-darwin"
+              mkdir -p "$bin"
+              curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+                "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$BINDGEN_VERSION/$archive.tar.gz" |
+                tar -xzf - -C "$bin" --strip-components=1 "$archive/wasm-bindgen"
+            fi
+          fi
+          printf 'WASM_BINDGEN=%s\n' "$bindgen" >> "$GITHUB_ENV"
+          cargo +"$RUST_VERSION" fetch --locked --offline --manifest-path constitution/Cargo.toml ||
+            cargo +"$RUST_VERSION" fetch --locked --manifest-path constitution/Cargo.toml
       - name: 真实代码回归与严格分析
         run: |
           node scripts/build.mjs test "$PLATFORM"
@@ -149,7 +177,11 @@ jobs:
         timeout-minutes: 2
         continue-on-error: true
         with:
-          path: target/cache
+          path: |
+            target/cache
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+            ~/.rustup/toolchains/${{ steps.constitution.outputs.rust }}-aarch64-apple-darwin
           key: ${{ steps.cache.outputs.cache-primary-key }}
       - name: 清理本轮现场
         if: always()

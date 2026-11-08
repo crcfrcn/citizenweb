@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {mkdtempSync,mkdirSync,cpSync,readFileSync,rmSync,existsSync,readdirSync,writeFileSync,chmodSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {root,displayName,run} from '../scripts/build.mjs';
-import {constitutionFiles,describeAction} from '../scripts/config.mjs';
+import {constitutionFiles,constitutionTools,describeAction} from '../scripts/config.mjs';
 import {initialVersion,platforms,repository} from '../scripts/build.mjs';
 const platform=Object.keys(platforms)[0];
 if(process.env.CONSTITUTION_OUTPUT)test('宪法 Worker 使用实际 Wasm 为多台电脑共享正文',async t=>{
@@ -169,6 +169,41 @@ test('各平台Workflow独立生成版本和清理，配置只声明数据',()=>
  for(const target of Object.keys(platforms)){
   assert.deepEqual(describeAction({flow:'release',platform:target}),{repository,workflow:target+'.yml',ref:'main',inputs:{}});
   const source=readFileSync(join(root,'.github/workflows',target+'.yml'),'utf8');assert.match(source,/gh run delete/u);assert.match(source,/github\.run_number/u);
+ }
+});
+
+// 执行工作流原脚本，以命令桩区分缓存命中、缺件和下载失败。
+test('宪法自动化复用锁定工具并补齐冷缓存',async t=>{
+ const workflow=readFileSync(join(root,'.github/workflows/web.yml'),'utf8');
+ const script=workflow.split('      - name: 准备锁定的宪法工具\n')[1].split('        run: |\n')[1]
+  .split('      - name: 真实代码回归与严格分析\n')[0].split('\n').map(line=>line.slice(10)).join('\n');
+ const parent=join(root,'target/test');mkdirSync(parent,{recursive:true});
+ const work=mkdtempSync(join(parent,'constitution-tools-'));t.after(()=>rmSync(work,{recursive:true,force:true}));
+ const trace=join(work,'trace'),output=join(work,'env'),{rust,bindgen}=constitutionTools;
+ const mock=[
+  'rustup() { case "$1 $2" in "run "*) [ "$MODE" = warm ];; "target list") echo wasm32-unknown-unknown;; *) echo "$*" >> "$TRACE";; esac; }',
+  'wasm-bindgen() { if [ "$MODE" = warm ]; then echo "wasm-bindgen $BINDGEN_VERSION"; else echo "wasm-bindgen 0.0.0"; fi; }',
+  'cargo() { echo "$*" >> "$TRACE"; [ "$3" = --locked ] && { [ "$4" != --offline ] || [ "$MODE" = warm ]; }; }',
+  'curl() { echo "$*" >> "$TRACE"; [ "$MODE" != failed ]; }',
+  'tar() { cat >/dev/null; echo "extract" >> "$TRACE"; }'
+ ].join('\n');
+ const fetch=`+${rust} fetch --locked`,manifest='--manifest-path constitution/Cargo.toml';
+ for(const mode of ['warm','cold','failed']){
+  writeFileSync(trace,'');writeFileSync(output,'');
+  const prepare=run('/bin/bash',['-c',mock+'\n'+script],{cwd:work,env:{
+   MODE:mode,TRACE:trace,GITHUB_WORKSPACE:work,GITHUB_ENV:output,RUST_VERSION:rust,BINDGEN_VERSION:bindgen
+  }});
+  if(mode==='failed')await assert.rejects(prepare);else await prepare;
+  const calls=readFileSync(trace,'utf8').trim().split('\n');
+  if(mode==='warm'){
+   assert.deepEqual(calls,[`${fetch} --offline ${manifest}`]);
+   assert.equal(readFileSync(output,'utf8'),'WASM_BINDGEN=wasm-bindgen\n');
+  }else{
+   assert.equal(calls[0],`toolchain install ${rust} --profile minimal --target wasm32-unknown-unknown`);
+   assert.ok(calls[1].endsWith(`/${bindgen}/wasm-bindgen-${bindgen}-aarch64-apple-darwin.tar.gz`));
+   assert.deepEqual(calls.slice(2),mode==='cold'?['extract',`${fetch} --offline ${manifest}`,`${fetch} ${manifest}`]:['extract']);
+   assert.equal(readFileSync(output,'utf8'),mode==='cold'?`WASM_BINDGEN=${work}/target/cache/worker/bin/wasm-bindgen\n`:'');
+  }
  }
 });
 

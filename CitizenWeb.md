@@ -51,7 +51,7 @@ scripts/config.mjs仅声明控制台所需的CLOUDFLARE_ACCOUNT、PAGES_DEPLOY�
 已有正式归档的读取、格式识别或解包工具失败沿用“正式归档解压失败”错误类别；路径、重复成员、链接、类型及大小约束仍独立校验。test/release.test.mjs中的原解压失败断言保持不变，不放宽检查来消除失败。该逻辑只处理发布前读取已有正式包，不参与编译或归档创建。
 工具退出回执先保留原工具失败及诊断，再以系统ps只读获取PID/PGID表；只在有效快照包含调用进程、且本轮进程组已空时允许收尾。查询错误、无效或不完整快照、后代未退出均明确失败并附本轮PID/PGID、保留现场。现有Node内置Mock回归保留原失败/EPERM/留场断言，另验证无效快照和真实同组后代完成，不新增框架、接口或控制台改动。
 
-ESLint 与 TypeScript 检查归 test 阶段，test 还运行 Rust 单测及实际 Wasm 接口回归。build 运行 Vite 生产构建、白皮书交付及宪法 Pages 产物编译，不重复静态检查。测试和编译各自使用独立现场，npm 和 Cargo 分别按产品锁文件执行。工作流缓存键同时包含 npm 锁和宪法 Cargo 锁，Rust 与 wasm-bindgen 复用已交付版本，清理只处理本轮现场。
+ESLint 与 TypeScript 检查归 test 阶段，test 还运行 Rust 单测及实际 Wasm 接口回归。build 运行 Vite 生产构建、白皮书交付及宪法 Pages 产物编译，不重复静态检查。测试和编译各自使用独立现场，npm 和 Cargo 分别按产品锁文件执行。工作流缓存键包含 npm 锁和宪法 Cargo 锁。远程构建先复用锁定的 Rust、Wasm 目标、wasm-bindgen 和 Cargo 缓存，缺件时从 Rust 官方渠道、wasm-bindgen 官方发布及 Cargo 原锁指定的来源补齐。Cargo 测试和构建保持离线，清理只处理本轮现场。
 
 控制台通过scripts/config.mjs读取测试、编译与塔塔自动化声明；测试和编译仍由build.mjs执行，GitHub流程归本仓YAML；独立发布调用publish.mjs的prepare/publish命令。prepare只验真已有成功包并读取当前生产部署，原生冷签批准后publish才消费同一proof及previousID，通过官方Wrangler部署并回读；配置文件不转导出动作，发布不调用编译。
 
