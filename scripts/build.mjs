@@ -134,6 +134,9 @@ async function buildWeb(verify,test){
  try{
   const env={...webEnvironment(work,cache),...rustEnvironment(work)},project=await prepareWeb(work,env),dist=join(work,'dist');
   if(verify){
+   // 工作流回归读取实际 YAML，和源码一起放进本轮隔离目录。
+   const workflow='.github/workflows/web.yml';
+   copy(join(root,workflow),join(project,workflow));
    await run(process.execPath,['--test','test/build.test.mjs','test/release.test.mjs'],{cwd:project,env});
    await webChecks(project,env);
    await run('cargo',['test','--offline','--locked','--manifest-path','constitution/Cargo.toml'],{cwd:project,env});
