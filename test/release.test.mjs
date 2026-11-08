@@ -26,13 +26,14 @@ test('损坏归档不会变成空的成功产物',()=>{assert.throws(()=>inspect
 
 // 发布测试使用自有合成正式包，归档生成与模拟部署均不进入发布执行文件。
 const workflow='.github/workflows/web.yml';
+const wranglerLock={version:'4.121.0',resolved:'https://registry.npmjs.org/wrangler/-/wrangler-4.121.0.tgz',integrity:'sha512-fixture'};
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const stable=value=>Array.isArray(value)?`[${value.map(stable).join(',')}]`:value&&typeof value==='object'?`{${Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+stable(value[key])).join(',')}}`:JSON.stringify(value);
  const names=releaseNames('1.0.0');
  function fixture({manifestFields={}}={}){
   const source='a'.repeat(40),version='1.0.0',tag='公民官网·Web·v1.0.0';
   const fileBytes=new Map([['package.json',Buffer.from(JSON.stringify({version,devDependencies:{wrangler:'4.121.0'}}))],
-   ['package-lock.json',Buffer.from(JSON.stringify({version,packages:{'':{version},'node_modules/wrangler':{version:'4.121.0'}}}))],
+   ['package-lock.json',Buffer.from(JSON.stringify({version,packages:{'':{version},'node_modules/wrangler':wranglerLock}}))],
    ['dist/index.html',Buffer.from('<html>synthetic</html>')],['dist/app.js',Buffer.from('synthetic')],
    ['dist/assets/Whitepaper.js',Buffer.from('synthetic-whitepaper')]]);
   for(const name of constitutionFiles)fileBytes.set('dist/'+name,Buffer.from('synthetic'));
@@ -98,20 +99,17 @@ else{const data=JSON.parse(readFileSync(join(root,'responses.json'))),url=new UR
   assert.throws(()=>inspectPackage(invalid.body.get(names[0]),invalid.body.get(names[1]),invalid.body.get(names[2]),'1.0.0',invalid.run.head_sha),/清单身份无效/u);
  });
  test('Pages发布只消费同一正式候选且失败不触发安全部署',async()=>{
-  const source=fixture(),proof=await preparePublication({request:source.request});let installs=0,calls=0;
+  const source=fixture(),proof=await preparePublication({request:source.request});let calls=0;
   const deploy=async request=>{calls++;
    assert.equal(request.release_tag,proof.tag);assert.equal(request.archive_sha256,proof.assets[0].sha256);
    assert.equal(request.previous_deployment_id,'00000000-0000-4000-8000-000000000001');
    return {product_id:'citizenweb',platform:'web',release_tag:proof.tag,source_sha:proof.source_sha,project:'citizenweb',deployed:true};};
   const options={proof,runID:'123456789',nodePath:process.execPath,
-   previousID:'00000000-0000-4000-8000-000000000001',request:source.request,deploy,
-   install:async(_node,_args,work,environment)=>{installs++;assert.ok(work.includes('/target/publish/web/'));assert.equal(environment.npm_config_cache,process.env.npm_config_cache||join(root,'target/cache/npm'));assert.equal(environment.npm_config_offline,'true');}};
-  const result=await publishPages(options);assert.equal(result.deployed,true);assert.equal(installs,1);assert.equal(calls,1);
+   previousID:'00000000-0000-4000-8000-000000000001',request:source.request,deploy};
+  const result=await publishPages(options);assert.equal(result.deployed,true);assert.equal(calls,1);
   await assert.rejects(publishPages({...options,proof:{...proof,source_sha:'b'.repeat(40)}}),/授权后发生变化/u);
   assert.equal(calls,1);
   await assert.rejects(publishPages({...options,previousID:'not-a-deployment'}),/任务身份无效/u);
-  assert.equal(calls,1);
-  await assert.rejects(publishPages({...options,install:async()=>{throw Error('锁定依赖缺失');}}),/锁定依赖缺失/u);
   assert.equal(calls,1);
  });
  test('官网发布配置只声明账户、部署令牌与本产品冷签信任锚',async()=>{
@@ -131,7 +129,10 @@ else{const data=JSON.parse(readFileSync(join(root,'responses.json'))),url=new UR
   const source=fixture(),proof=await preparePublication({request:source.request});
   const archive=join(work,'fixture.tgz');await writeFile(archive,source.body.get(names[0]));
   execFileSync('/usr/bin/tar',['-xzf',archive,'-C',work,'--no-same-owner','--no-same-permissions']);await rm(archive);
-  await mkdir(join(work,'node_modules/wrangler/bin'),{recursive:true});await writeFile(join(work,'node_modules/wrangler/bin/wrangler.js'),'synthetic');
+  const toolsRoot=join(work,'existing-tools'),modules=join(toolsRoot,'node_modules');
+  const wrangler=join(modules,'wrangler/bin/wrangler.js'),installed=join(modules,'.package-lock.json');
+  await mkdir(dirname(wrangler),{recursive:true});await writeFile(wrangler,'synthetic');
+  await writeFile(installed,JSON.stringify({packages:{'node_modules/wrangler':wranglerLock}}));
   const previous='00000000-0000-4000-8000-000000000001',latest='00000000-0000-4000-8000-000000000002';
   const payload={schema:1,product_id:'citizenweb',platform:'web',run_id:'123456789',release_tag:proof.tag,source_sha:proof.source_sha,version:proof.version,
    archive_sha256:proof.assets[0].sha256,previous_deployment_id:previous,work,node_path:await realpath(process.execPath)};
@@ -147,12 +148,12 @@ else{const data=JSON.parse(readFileSync(join(root,'responses.json'))),url=new UR
    reads++;return Response.json({success:true,result:[{id:reads===1?(mode==='changed' ? latest : previous):latest,project_name:'citizenweb',environment:'production',
     latest_stage:{name:'deploy',status:'success'},created_on:new Date().toISOString(),deployment_trigger:{metadata:{branch:'main',commit_hash:mode==='wrong-source'?'b'.repeat(40):proof.source_sha}}}]});
   };
-  return {payload,credentials,calls,invoke,request,setMode:value=>{mode=value;reads=0;calls.length=0;}};
+  return {payload,credentials,calls,invoke,request,toolsRoot,wrangler,installed,setMode:value=>{mode=value;reads=0;calls.length=0;}};
  }
  test('Pages上传及回读使用本产品入口，凭据不进入命令行',async t=>{
   const f=await pagesExecutionFixture(t),result=await deployPages(f.payload,f.credentials,f);
   assert.equal(result.deployed,true);assert.equal(f.calls.filter(args=>args[1]==='pages').length,1);
-  const command=f.calls.find(args=>args[1]==='pages');assert.deepEqual(command.slice(1,4),['pages','deploy',join(f.payload.work,'dist')]);
+  const command=f.calls.find(args=>args[1]==='pages');assert.deepEqual(command.slice(0,4),[f.wrangler,'pages','deploy',join(f.payload.work,'dist')]);
  });
  test('Pages前态变化、工具失败、错误回读和取消均不返回成功',async t=>{
   const f=await pagesExecutionFixture(t);f.setMode('changed');await assert.rejects(deployPages(f.payload,f.credentials,f),/上次生产部署已变化/u);
@@ -161,6 +162,8 @@ else{const data=JSON.parse(readFileSync(join(root,'responses.json'))),url=new UR
   f.setMode('wrong-source');await assert.rejects(deployPages(f.payload,f.credentials,f),/回读失败/u);
   f.setMode('success');const abort=new AbortController();abort.abort(Error('synthetic cancellation'));
   await assert.rejects(deployPages(f.payload,f.credentials,{...f,signal:abort.signal}),/synthetic cancellation/u);assert.equal(f.calls.length,0);
+  await writeFile(f.installed,JSON.stringify({packages:{'node_modules/wrangler':{...wranglerLock,integrity:'sha512-other'}}}));
+  await assert.rejects(deployPages(f.payload,f.credentials,f),/本机依赖与正式包锁不一致/u);assert.equal(f.calls.length,0);
   await writeFile(join(f.payload.work,'dist/index.html'),'changed');await assert.rejects(deployPages(f.payload,f.credentials,f),/清单不一致/u);assert.equal(f.calls.length,0);
  });
 
@@ -192,7 +195,7 @@ test('官网通过通用声明及原准备提交命令发布，旧批准不能�
  await assert.rejects(prepareApproval({configuration:{'production:CLOUDFLARE_ACCOUNT':configuration.CLOUDFLARE_ACCOUNT,'cloudflare:PAGES_DEPLOY':configuration.PAGES_DEPLOY},context,publicationRequest:f.request,request:async()=>{throw Error('旧键不应访问Cloudflare');}}),/凭据无效/u);
  const prepared=await prepareApproval({configuration,context,publicationRequest:f.request,request:async()=>Response.json({success:true,result:[{id:'00000000-0000-4000-8000-000000000001',project_name:'citizenweb',environment:'production',latest_stage:{status:'success'}}]})});
  let calls=0;const value={candidate:prepared.candidate,context,approvedPayload:prepared.payload_base64,configuration,runID:'123456789',nodePath:process.execPath};
- const options={request:f.request,install:async()=>{},deploy:async payload=>{calls++;return {product_id:'citizenweb',platform:'web',project:'citizenweb',deployed:true,release_tag:payload.release_tag,source_sha:payload.source_sha};}};
+ const options={request:f.request,deploy:async payload=>{calls++;return {product_id:'citizenweb',platform:'web',project:'citizenweb',deployed:true,release_tag:payload.release_tag,source_sha:payload.source_sha};}};
  assert.equal((await publishApproval(value,options)).deployed,true);assert.equal(calls,1);
  await assert.rejects(publishApproval({...value,approvedPayload:Buffer.from('changed').toString('base64')},options));
  await assert.rejects(publishApproval({...value,candidate:{...value.candidate,proof:{...value.candidate.proof,tag:'other'}}},options));assert.equal(calls,1);

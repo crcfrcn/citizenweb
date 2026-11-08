@@ -9,6 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {constitutionFiles,constitutionTools} from './config.mjs';
 
 const repository='crcfrcn/citizenweb',workflow='.github/workflows/web.yml';
+const productRoot=fileURLToPath(new URL('../',import.meta.url));
 // 正式附件是产品公开交付格式；发布独立读取，不导入编译入口或配置执行函数。
 const artifactPrefix='公民官网·Web·v',artifactFilePrefix='citizenweb-web-v',artifactSuffixes=['tgz','json','sha256'];
 // 只按声明读取同一正式版本的附件名称，不创建产物。
@@ -173,6 +174,20 @@ async function publicationFile(work,name,maximum=128*1024**2){
  if(!info.isFile()||info.isSymbolicLink()||await realpath(path)!==path||info.size<1||info.size>maximum)fail('发布现场成员无效：'+name);
  return readFile(path);
 }
+// 发布直接使用官网现有依赖，按正式包的锁核对安装记录。
+async function installedWrangler(lock,toolsRoot){
+ const name='node_modules/wrangler';
+ let installed;
+ try{installed=JSON.parse(await publicationFile(toolsRoot,'node_modules/.package-lock.json')).packages;}
+ catch{fail('官网本机依赖安装记录不可用');}
+ if(!installed?.[name]||Object.entries(installed).some(([path,entry])=>{
+  const pinned=lock.packages[path];
+  return !pinned?.integrity||pinned.version!==entry?.version||pinned.integrity!==entry?.integrity||pinned.resolved!==entry?.resolved;
+ }))fail('官网本机依赖与正式包锁不一致');
+ const entry=name+'/bin/wrangler.js';
+ await publicationFile(toolsRoot,entry);
+ return join(toolsRoot,entry);
+}
 function deploymentCredentials(credentials,{secrets=false}={}){
  if(!credentials||typeof credentials!=='object'||Array.isArray(credentials)
   ||Object.keys(credentials).sort().join('\0')!==(secrets?['account','secrets','token']:['account','token']).join('\0')
@@ -197,7 +212,7 @@ export async function publishTools(){
 }
 
 // 上传与验收归本产品；调度方的deploy回调只承担凭据通道，调用的仍是此入口。
-export async function deployPages(payload,credentials,{signal,invoke=runTool,request=fetch,now=Date.now}={}){
+export async function deployPages(payload,credentials,{signal,invoke=runTool,request=fetch,now=Date.now,toolsRoot=productRoot}={}){
  signal?.throwIfAborted();
  if(!exact(payload,['schema','product_id','platform','run_id','release_tag','source_sha','version','archive_sha256','previous_deployment_id','work','node_path'])
   ||payload.schema!==1||payload.product_id!=='citizenweb'||payload.platform!=='web'
@@ -226,9 +241,9 @@ export async function deployPages(payload,credentials,{signal,invoke=runTool,req
   if(row.path.startsWith('dist/')&&row.path!=='dist/citizenweb-release.json')assets.push(row);
  }
  if(!seen.has('dist/index.html')||!seen.has('dist/citizenweb-release.json')||!constitutionFiles.every(name=>seen.has('dist/'+name))||digest(Buffer.from(stable(assets)))!==manifest.assets_sha256)fail('Pages正式页面不完整');
- const wrangler=join(work,'node_modules/wrangler/bin/wrangler.js');await publicationFile(work,'node_modules/wrangler/bin/wrangler.js');
+ const wrangler=await installedWrangler(lock,toolsRoot);
  if((await invoke(node,['--version'],work,environment,signal)).trim()!=='v25.2.1'
-  ||!(await invoke(node,[wrangler,'--version'],work,environment,signal)).includes('4.121.0'))fail('Pages执行工具不符合产品锁');
+  ||(await invoke(node,[wrangler,'--version'],work,environment,signal)).trim()!=='4.121.0')fail('Pages执行工具不符合产品锁');
  const read=path=>cloudflareJSON(account,token,'pages/projects/citizenweb'+path,{request,signal});
  const latest=await read('/deployments?env=production&per_page=1'),previous=latest?.[0];
  if(previous?.id!==payload.previous_deployment_id||previous.project_name!=='citizenweb'||previous.environment!=='production'||previous.latest_stage?.status!=='success')fail('Pages上次生产部署已变化');
@@ -245,7 +260,7 @@ export async function deployPages(payload,credentials,{signal,invoke=runTool,req
  return {product_id:'citizenweb',platform:'web',project:'citizenweb',release_tag:payload.release_tag,source_sha:payload.source_sha,deployment_id:result.id,deployed:true};
 }
 
-export async function publishPages({proof,runID,nodePath=process.execPath,previousID,credentials,deploy=payload=>deployPages(payload,credentials,{signal}),signal,beforeDeploy,request=publicRequest,install=runTool}={}){
+export async function publishPages({proof,runID,nodePath=process.execPath,previousID,credentials,deploy=payload=>deployPages(payload,credentials,{signal}),signal,beforeDeploy,request=publicRequest}={}){
  if(proof?.product_id!=='citizenweb'||proof.delivery_channel!=='web'||!positive(proof.run_id)
   ||typeof runID!=='string'||!/^[1-9][0-9]*$/u.test(runID)||typeof deploy!=='function'
   ||typeof nodePath!=='string'||!nodePath.startsWith('/')||typeof previousID!=='string'
@@ -261,13 +276,6 @@ export async function publishPages({proof,runID,nodePath=process.execPath,previo
    const path=join(work,name);await mkdir(dirname(path),{recursive:true,mode:0o700});
    await writeFile(path,bytes,{flag:'wx',mode:0o600});
   }
-  const source=JSON.parse(current.contents.get('package.json'));
-  const lock=JSON.parse(current.contents.get('package-lock.json'));
-  if(source.devDependencies?.wrangler!=='4.121.0'||lock.packages?.['node_modules/wrangler']?.version!=='4.121.0')fail('正式包Wrangler锁无效');
-  const environment={PATH:[dirname(nodePath),'/usr/bin','/bin'].join(':'),HOME:work,
-   npm_config_cache:process.env.npm_config_cache||fileURLToPath(new URL('../target/cache/npm',import.meta.url)),npm_config_offline:'true',CI:'1',WRANGLER_SEND_METRICS:'false'};
-  const npmCLI=join(dirname(nodePath),'../lib/node_modules/npm/bin/npm-cli.js');
-  await install(nodePath,[npmCLI,'ci','--offline','--ignore-scripts','--no-audit','--no-fund'],work,environment,signal);
   signal?.throwIfAborted();beforeDeploy?.();
   const payload={schema:1,product_id:'citizenweb',platform:'web',run_id:runID,
    release_tag:proof.tag,source_sha:proof.source_sha,version:proof.version,
