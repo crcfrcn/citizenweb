@@ -243,6 +243,30 @@ test('各平台Workflow独立生成版本和清理，配置只声明数据',()=>
  }
 });
 
+test('Linux 版本作业读取成功产物并精确递增补丁号',async()=>{
+ const workflow=readFileSync(join(root,'.github/workflows/web.yml'),'utf8');
+ const job=workflow.split('  version:\n')[1].split('\n  compile:')[0];
+ const script=job.split('        run: |\n')[1].split('\n').map(line=>line.slice(10)).join('\n');
+ const mock=String.raw`
+gh() {
+  case "$2" in
+    */actions/workflows/web.yml/runs\?*) printf '%s\n' "$PREVIOUS";;
+    */actions/runs/42/artifacts\?*) printf '%s\n' "$ARTIFACTS";;
+    *) return 1;;
+  esac
+}
+`;
+ const version=(previous,artifacts)=>run('/bin/bash',['-c',mock+script],{capture:true,env:{
+  GITHUB_REPOSITORY:repository,GITHUB_OUTPUT:'/dev/stdout',PREVIOUS:previous,
+  ARTIFACTS:JSON.stringify({artifacts:artifacts.map(name=>({name}))}),
+ }});
+ assert.doesNotMatch(job,/setup-node/u);
+ assert.equal(await version('',[]),'version='+JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version);
+ assert.equal(await version('42',['other','公民官网·Web·v1.2.999']),'version=1.2.1000');
+ assert.equal(await version('42',['公民官网·Web·v1.2.9007199254740999']),'version=1.2.9007199254741000');
+ await assert.rejects(version('42',['other']));
+});
+
 // 执行工作流原脚本，以命令桩区分缓存命中、缺件和下载失败。
 test('宪法自动化复用锁定工具并补齐冷缓存',async t=>{
  const workflow=readFileSync(join(root,'.github/workflows/web.yml'),'utf8');

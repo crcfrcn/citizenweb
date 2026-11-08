@@ -30,30 +30,24 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        with:
-          node-version: '25.2.1'
-          check-latest: false
       - id: version
         name: 计算本Run版本
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/web.yml/runs?branch=main&event=workflow_dispatch&status=success&per_page=1" > "$RUNNER_TEMP/previous.json"
-          node --input-type=module >> "$GITHUB_OUTPUT" <<'NODE'
-          import {readFileSync} from 'node:fs';
-          import {execFileSync} from 'node:child_process';
-          let version=JSON.parse(readFileSync('package.json','utf8')).version;
-          const previous=JSON.parse(readFileSync(process.env.RUNNER_TEMP+'/previous.json','utf8')).workflow_runs[0];
-          if(previous){
-            const data=JSON.parse(execFileSync('gh',['api','repos/'+process.env.GITHUB_REPOSITORY+'/actions/runs/'+previous.id+'/artifacts?per_page=100'],{encoding:'utf8'}));
-            const prefix="公民官网·Web·v";
-            const artifact=data.artifacts.find(value=>value.name.startsWith(prefix)&&/^\d+\.\d+\.\d+$/u.test(value.name.slice(prefix.length)));
-            const parts=artifact.name.slice(prefix.length).split('.');parts[2]=String(BigInt(parts[2])+1n);version=parts.join('.');
-          }
-          console.log('version='+version);
-          NODE
+          previous="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/web.yml/runs?branch=main&event=workflow_dispatch&status=success&per_page=1" --jq '.workflow_runs[0].id // empty')"
+          if [[ -z "$previous" ]]; then
+            version="$(jq -er '.version' package.json)"
+          else
+            # 只对最后一个非 9 数字加一，再将末尾的 9 归零，保留长版本号的精度。
+            version="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$previous/artifacts?per_page=100" | jq -er '
+              first(.artifacts[].name | capture("^公民官网·Web·v(?<base>[0-9]+\\.[0-9]+\\.)(?<patch>[0-9]+)$"))
+              | .base + (.patch | sub("^0+"; "") | capture("^(?<head>[0-9]*?)(?<digit>[0-8]?)(?<tail>9*)$")
+                | .head + (((.digit | tonumber? // 0) + 1) | tostring) + (.tail | gsub("9"; "0")))
+            ')"
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
   compile:
     needs: version
     name: 公民官网·Web·v${{ needs.version.outputs.version }}
