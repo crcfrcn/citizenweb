@@ -41,12 +41,12 @@
 
   [4.1. 主体架构](#41主体架构)
   [4.2. 公民协议](#42公民协议)
-  [4.3. 节点](#43节点)
+  [4.3. 节点程序](#43节点程序)
   [4.4. 链上中国](#44链上中国)
   </details>
 
 - <details>
-  <summary>5. 运行时</summary>
+  <summary>5. 公民协议</summary>
 
   [5.1. 创世模块](#51创世模块)
   [5.2. 投票引擎](#52投票引擎)
@@ -74,7 +74,7 @@
 - <details>
   <summary>6. 节点程序</summary>
 
-  [6.1. 节点简介](#61节点简介)
+  [6.1. 节点程序简介](#61节点程序简介)
   [6.2. 宪法守卫](#62宪法守卫)
   [6.3. 节点守卫](#63节点守卫)
   [6.4. 治理机构](#64治理机构)
@@ -96,6 +96,10 @@
 
 - <details>
   <summary>9. 公民钱包</summary>
+  </details>
+
+- <details>
+  <summary>10. 公民软件包</summary>
   </details>
 
 ****
@@ -372,9 +376,9 @@ crcfrcn/
 * 投票流程只能由投票引擎处理，业务模块只负责提案语义、数据校验和通过后的执行动作，不得复刻投票、计票或人口快照逻辑；<br><span class="whitepaper-en">Voting flows may only be handled by the voting engine. Business modules are responsible only for proposal semantics, data validation, and post-approval execution actions; they may not duplicate voting, tallying, or population-snapshot logic.</span>
 * `citizen-identity` 是链上公民身份模块，保存投票和参选所需的最小字段，供选举投票、联合公投和人口快照读取。<br><span class="whitepaper-en">`citizen-identity` is the on-chain citizen-identity module. It stores only the minimum fields required for voting and candidacy and is read by election voting, joint referendums, and population snapshots.</span>
 
-## 4.3.节点<br><span class="whitepaper-heading-en">4.3. Node</span>
+## 4.3.节点程序<br><span class="whitepaper-heading-en">4.3. Node Software</span>
 
-* 节点采用 libp2p 网络、RocksDB 存储、Blake2 哈希、sr25519 链上账户签名和 Ed25519 网络密钥；<br><span class="whitepaper-en">The node uses libp2p networking, RocksDB storage, Blake2 hashing, sr25519 on-chain account signatures, and Ed25519 network keys.</span>
+* 节点程序采用 libp2p 网络、RocksDB 存储、Blake2 哈希、sr25519 链上账户签名和 Ed25519 网络密钥；<br><span class="whitepaper-en">The node software uses libp2p networking, RocksDB storage, Blake2 hashing, sr25519 on-chain account signatures, and Ed25519 network keys.</span>
 * 全节点通过 PoW 获得出块权，权威节点通过 GRANDPA 进行最终性投票；44 个权威节点由 1 个国家储委会权威节点和 43 个省储委会权威节点组成；<br><span class="whitepaper-en">Full nodes obtain block-production rights through PoW, while authority nodes vote on finality through GRANDPA. The 44 authority nodes consist of one National Reserve Committee authority node and 43 Provincial Reserve Committee authority nodes.</span>
 * 桌面端负责启动、停止和观察本地节点，并按用户确认打开或关闭本机链上中国平台和节能能力；CitizenApp 私密聊天采用 OpenMLS、Cloudflare 瞬时信封/信令转发和 WebRTC 设备间通信，不由桌面区块链节点承载。<br><span class="whitepaper-en">The desktop application starts, stops, and observes the local node, and enables or disables the local OnChina platform and energy-saving capability only after user confirmation. CitizenApp private chat uses OpenMLS, transient Cloudflare envelope and signaling relay, and WebRTC device-to-device communication; it is not carried by desktop blockchain nodes.</span>
 
@@ -384,7 +388,9 @@ crcfrcn/
 * 链上中国承接公民档案、公权机构、私权机构、教育机构、注册局管理员、法律文库和立法入口；涉及投票、计票、选举结果和立法状态推进的流程仍由链上投票引擎负责。<br><span class="whitepaper-en">OnChina handles citizen records, public institutions, private institutions, education institutions, registry administrators, legal library, and legislation entry points. Voting, tallying, election results, and legislative state progression remain the responsibility of the on-chain voting engine.</span>
 
 ****
-# 5.运行时<br><span class="whitepaper-heading-en">5. runtime</span>
+# 5.公民协议<br><span class="whitepaper-heading-en">5. Citizen Protocol</span>
+
+* 公民协议即公民链运行时协议（Runtime），以 WASM 形式执行，是公民链的运行核心。它由下述创世、投票引擎、治理、管理员、公权业务、实体、发行、交易及其他基础模块组成，统一执行链上规则；运行期的公民协议升级通过链上治理流程进行，并须遵守宪法守卫和节点守卫已实施的保护规则。<br><span class="whitepaper-en">The Citizen Protocol is CitizenChain’s runtime protocol (Runtime). Executed as WASM, it is the operational core of CitizenChain. It consists of the genesis, voting-engine, governance, administrator, public-business, entity, issuance, transaction, and other foundational modules described below, which jointly execute the on-chain rules. During the operating phase, Citizen Protocol upgrades follow the on-chain governance process and must comply with the implemented protections of the Constitution Guard and Node Guard.</span>
 
 ## 5.1.创世模块<br><span class="whitepaper-heading-en">5.1. genesis</span>
 
@@ -605,7 +611,7 @@ VOTING → PASSED → EXECUTED
 ****
 # 6.节点程序<br><span class="whitepaper-heading-en">6. Node Software</span>
 
-## 6.1.节点简介<br><span class="whitepaper-heading-en">6.1. Node Overview</span>
+## 6.1.节点程序简介<br><span class="whitepaper-heading-en">6.1. Node Software Overview</span>
 
 * 公民链节点由 `citizenchain` 原生节点和桌面端运维台组成；运行节点即成为全节点，承担区块同步、交易验证、PoW 出块、GRANDPA 最终性参与、RPC 服务和本地服务管理。<br><span class="whitepaper-en">A CitizenChain node consists of the native `citizenchain` node and the desktop operations console. Running the node makes the deployment a full node responsible for block synchronization, transaction verification, PoW block production, GRANDPA finality participation, RPC service, and local service management.</span>
 * 节点使用冻结的 plain chainspec 与安装包内置创世状态包启动主链状态，不提供运行期随意重建创世的入口；首次启动生成本机 `powr` 出块密钥，初始化完成后复用本机 keystore。<br><span class="whitepaper-en">The node starts from a frozen plain chainspec plus an installer-bundled genesis state package and does not provide an arbitrary runtime entry for rebuilding genesis. On first startup it generates the local `powr` block-production key and reuses the local keystore after initialization.</span>
@@ -691,3 +697,10 @@ VOTING → PASSED → EXECUTED
 * 公民钱包（CitizenWallet）是公民链离线冷钱包，iOS、Android端；公民钱包只负责账户创建、账户导入、助记词和私钥本地保存、离线签名、扫码识别签名请求和输出签名结果，不承担轻节点、链上查询、交易广播、治理浏览、即时通信、清算行绑定或投票交互职责。<br><span class="whitepaper-en">CitizenWallet is the offline cold wallet of CitizenChain for iOS and Android. It is responsible only for account creation, account import, local storage of mnemonics and private keys, offline signing, QR-code signing-request recognition, and signing-result output. It does not act as a light node and does not perform on-chain queries, transaction broadcasting, governance browsing, instant messaging, clearing-bank binding, or voting interaction.</span>
 * 公民钱包的二维码签名请求必须展示可被用户理解的账户、收款方、金额、治理动作、登录动作或公民身份确认动作等语义；不得诱导用户签署无法解释的黑盒载荷。签名结果只证明账户私钥对特定载荷授权，不表示公民钱包接管链上执行、资格判断或链下清算流程。<br><span class="whitepaper-en">A CitizenWallet QR-code signing request must display user-understandable semantics such as the account, recipient, amount, governance action, login action, or citizen identity confirmation action. It must not induce the user to sign an opaque payload that cannot be explained. The signing result proves only that the account private key authorized a specific payload; it does not mean that CitizenWallet takes over on-chain execution, eligibility determination, or off-chain clearing flows.</span>
 * 公民钱包当前签名阶段使用现有链上签名体系；后量子签名升级以 ADR-022 为唯一真源，未来通过公民链 runtime 升级和公民钱包、公民客户端升级，在不更换助记词、不更换钱包、不更换账户地址、不改变余额归属的前提下，将账户授权方式在位切换到 ML-DSA-65。账户地址仍以原 AccountId 为身份锚点，签名算法只是账户授权方式。<br><span class="whitepaper-en">CitizenWallet currently uses the existing on-chain signature system. The post-quantum signature upgrade is governed solely by ADR-022. In the future, through a CitizenChain runtime upgrade and upgrades to CitizenWallet and CitizenApp, account authorization shall be switched in place to ML-DSA-65 without changing the mnemonic, wallet, account address, or balance ownership. The account address shall remain anchored by the original AccountId, and the signature algorithm shall serve only as the account authorization method.</span>
+
+****
+# 10.公民软件包<br><span class="whitepaper-heading-en">10. CitizenSDK</span>
+
+* 公民软件包（CitizenSDK）是公民链应用的公共开发组件，提供钱包创建与导入、助记词校验、账户派生与管理、地址编码和签名功能；热账户在本机授权签名，冷账户通过二维码交由公民钱包离线签名。<br><span class="whitepaper-en">CitizenSDK is a shared development component for CitizenChain applications. It supports wallet creation and import, mnemonic validation, account derivation and management, address encoding, and signing. Hot accounts sign locally; cold accounts obtain offline signatures from CitizenWallet through QR codes.</span>
+* CitizenSDK内置轻客户端，提供区块同步、账户余额、链上状态查询、交易构造、提交、执行结果确认及交易记录；交易已广播或已被区块收录，不等于执行成功。<br><span class="whitepaper-en">CitizenSDK includes a light client for block synchronization, balances, on-chain queries, transaction construction, submission, execution-result verification, and history. Broadcasting or block inclusion alone does not mean successful execution.</span>
+* CitizenSDK提供二维码生成、图像识别和摄像头扫码能力，用于地址、登录、身份确认、转账和治理签名；采用统一Rust核心，提供公开C接口及Flutter接入，应用负责业务界面，公民协议负责链上规则与最终执行。<br><span class="whitepaper-en">CitizenSDK provides QR-code generation, image recognition, and camera scanning for addresses, login, identity confirmation, transfers, and governance signing. Its shared Rust core exposes public C interfaces and Flutter integration. Applications provide business interfaces; the Citizen Protocol governs on-chain rules and final execution.</span>
