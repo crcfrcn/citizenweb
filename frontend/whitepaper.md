@@ -40,7 +40,7 @@
   <summary>4. 技术架构</summary>
 
   [4.1. 主体架构](#41主体架构)
-  [4.2. 运行时](#42运行时)
+  [4.2. 公民协议](#42公民协议)
   [4.3. 节点](#43节点)
   [4.4. 链上中国](#44链上中国)
   </details>
@@ -72,11 +72,13 @@
   </details>
 
 - <details>
-  <summary>6. 节点</summary>
+  <summary>6. 节点程序</summary>
 
   [6.1. 节点简介](#61节点简介)
-  [6.2. 治理机构](#62治理机构)
-  [6.3. 链下清算行](#63链下清算行)
+  [6.2. 宪法守卫](#62宪法守卫)
+  [6.3. 节点守卫](#63节点守卫)
+  [6.4. 治理机构](#64治理机构)
+  [6.5. 链下清算行](#65链下清算行)
   </details>
 
 - <details>
@@ -347,47 +349,26 @@
 ## 4.1.主体架构<br><span class="whitepaper-heading-en">4.1. Core Architecture</span>
 
 * 主体使用 Rust 语言和 Substrate/Polkadot SDK 构建公民链，节点桌面端使用 Tauri 与 React，链上中国使用 Rust Axum、PostgreSQL 与 React，移动端使用 Flutter；<br><span class="whitepaper-en">The core system uses Rust and Substrate/Polkadot SDK to build CitizenChain. The desktop node uses Tauri and React, OnChina uses Rust Axum, PostgreSQL, and React, and the mobile clients use Flutter.</span>
-* 技术框架由主体架构、运行时、节点、链上中国四部分组成：运行时是链上规则真源，节点负责网络、出块和本地服务，链上中国负责注册、立法入口、法律文库和机构治理操作，公民与公民钱包分别承担联网轻节点和离线签名职责。<br><span class="whitepaper-en">The technical framework consists of core architecture, runtime, node, and OnChina. The runtime is the on-chain source of truth, the node handles networking, block production, and local services, OnChina handles registration, legislative entry points, legal library, and institutional governance operations, while CitizenApp and CitizenWallet handle online light-node functions and offline signing respectively.</span>
+* 公民链由公民协议、节点程序和链上中国三大部分组成：公民协议即链上 Runtime，负责链上规则执行；节点程序负责网络、出块、守卫检查和本地服务；链上中国负责注册和机构业务。公民SDK提供共享开发能力，公民与公民钱包分别承担联网轻节点和离线签名职责，公民服务端独立提供移动端所需的链下服务。<br><span class="whitepaper-en">CitizenChain consists of three major parts: the Citizen Protocol, the node software, and OnChina. The Citizen Protocol is the on-chain runtime responsible for executing on-chain rules; the node software handles networking, block production, guard checks, and local services; and OnChina handles registration and institutional operations. The Citizen SDK provides shared development capabilities. CitizenApp and CitizenWallet perform online light-node and offline-signing functions respectively, while CitizenServe independently provides off-chain services for the mobile clients.</span>
 * 主体架构图<br><span class="whitepaper-en">Core architecture diagram:</span>
 
 ```
-GMB/
-├── citizenchain/                # 公民链
-│   ├── node/                    # 全节点与桌面运维台，负责网络、PoW、GRANDPA、链上中国启动入口
-│   ├── onchina/                 # 链上中国平台，负责注册局业务、法律文库、立法入口、机构和公民管理
-│   └── runtime/                 # 链上 Runtime，负责发行、治理、投票、机构、管理员和链上公民身份
-│         ├── genesis/           # 创世期、创世常量、创世内置公权机构与初始管理员写入
-│         ├── votingengine/      # 内部投票、联合投票、立法投票、选举投票
-│         ├── governance/        # 运行期治理、协议升级和治理执行
-│         ├── admins/            # 公权管理员、私权管理员、个人多签管理员
-│         ├── entity/            # 公权机构、私权机构、个人多签等实体生命周期
-│         ├── public/            # 立法院、立法活动、选举活动等公权业务
-│         ├── issuance/          # 创世发行、公民发行、全节点发行、决议发行、省储行利息
-│         ├── transaction/       # 链上转账、链下清算、多签转账
-│         ├── misc/              # citizen-identity、pow-difficulty 等链上基础能力
-│         └── primitives/        # 公共常量、类型和创世参数
-├── citizenapp/                  # 公民，热钱包、轻节点、投票交互、通信和支付入口
-├── citizenwallet/               # 公民钱包，离线冷钱包和扫码签名工具
-└── citizenweb/                     # 官网与白皮书展示
-```
-
-<span class="whitepaper-en">English architecture map:</span>
-
-```
-GMB/
-├── citizenchain/                # CitizenChain
-│   ├── node/                    # Full node and desktop operations console
-│   ├── onchina/                 # OnChina platform for registry operations, legal library, legislation entry, institutions, and citizens
-│   └── runtime/                 # On-chain runtime for issuance, governance, voting, entities, admins, and citizen identity
-├── citizenapp/                  # CitizenApp, online light node and hot wallet
-├── citizenwallet/               # CitizenWallet, offline cold wallet and QR signing tool
-└── citizenweb/                     # Official website and whitepaper presentation
+crcfrcn/
+├── citizenchain/       # 公民链 / CitizenChain
+│   ├── node/           # 节点程序与桌面端 / Node software and desktop application
+│   ├── runtime/        # 公民协议 / Citizen Protocol
+│   └── onchina/        # 链上中国 / OnChina
+├── citizensdk/         # 公民SDK / Citizen SDK
+├── citizenapp/         # 公民移动端 / CitizenApp mobile application
+├── citizenwallet/      # 离线冷钱包 / Offline cold wallet
+├── citizenserve/       # 公民服务端 / CitizenServe
+└── citizenweb/         # 官网与白皮书 / Official website and whitepaper
 ```
 
 ****
-## 4.2.运行时<br><span class="whitepaper-heading-en">4.2. Runtime</span>
+## 4.2.公民协议<br><span class="whitepaper-heading-en">4.2. Citizen Protocol</span>
 
-* 运行时是链上规则真源，统一管理创世状态、发行、治理、管理员、实体注册、立法、选举、投票引擎、链上公民身份和交易清算；<br><span class="whitepaper-en">The runtime is the on-chain source of truth. It manages genesis state, issuance, governance, administrators, entity registration, legislation, elections, voting engine, on-chain citizen identity, and transaction settlement.</span>
+* 公民协议即公民链运行时协议，以 Runtime WASM 形式执行，是公民链的运行核心和链上规则真源，统一管理创世状态、发行、治理、管理员、实体注册、立法、选举、投票引擎、链上公民身份和交易清算。<br><span class="whitepaper-en">The Citizen Protocol is CitizenChain’s runtime protocol. Executed as Runtime WASM, it is the operational core of CitizenChain and the on-chain source of truth. It manages genesis state, issuance, governance, administrators, entity registration, legislation, elections, the voting engine, on-chain citizen identity, and transaction settlement.</span>
 * 投票流程只能由投票引擎处理，业务模块只负责提案语义、数据校验和通过后的执行动作，不得复刻投票、计票或人口快照逻辑；<br><span class="whitepaper-en">Voting flows may only be handled by the voting engine. Business modules are responsible only for proposal semantics, data validation, and post-approval execution actions; they may not duplicate voting, tallying, or population-snapshot logic.</span>
 * `citizen-identity` 是链上公民身份模块，保存投票和参选所需的最小字段，供选举投票、联合公投和人口快照读取。<br><span class="whitepaper-en">`citizen-identity` is the on-chain citizen-identity module. It stores only the minimum fields required for voting and candidacy and is read by election voting, joint referendums, and population snapshots.</span>
 
@@ -622,7 +603,7 @@ VOTING → PASSED → EXECUTED
 * 动态调整pow工作量证明难度。<br><span class="whitepaper-en">Dynamically adjust Proof-of-Work difficulty.</span>
 
 ****
-# 6.节点<br><span class="whitepaper-heading-en">6. Node</span>
+# 6.节点程序<br><span class="whitepaper-heading-en">6. Node Software</span>
 
 ## 6.1.节点简介<br><span class="whitepaper-heading-en">6.1. Node Overview</span>
 
@@ -630,13 +611,29 @@ VOTING → PASSED → EXECUTED
 * 节点使用冻结的 plain chainspec 与安装包内置创世状态包启动主链状态，不提供运行期随意重建创世的入口；首次启动生成本机 `powr` 出块密钥，初始化完成后复用本机 keystore。<br><span class="whitepaper-en">The node starts from a frozen plain chainspec plus an installer-bundled genesis state package and does not provide an arbitrary runtime entry for rebuilding genesis. On first startup it generates the local `powr` block-production key and reuses the local keystore after initialization.</span>
 * 桌面端是矿工与节点运维工具，不内置钱包私钥，不托管用户资产；钱包职能由公民（CitizenApp）热钱包和公民钱包（CitizenWallet）冷钱包承担。<br><span class="whitepaper-en">The desktop client is a miner and node-operations tool. It does not embed wallet private keys or custody user assets. Wallet functions are performed by the CitizenApp hot wallet and the CitizenWallet cold wallet.</span>
 
-## 6.2.治理机构<br><span class="whitepaper-heading-en">6.2. Governance Institutions</span>
+## 6.2.宪法守卫<br><span class="whitepaper-heading-en">6.2. Constitution Guard</span>
+
+* 宪法守卫是公民链节点程序中的宪法保护机制，以创世宪法为基准，独立检查链上宪法状态，防止公民协议升级绕过已实施的宪法保护规则。<br><span class="whitepaper-en">The Constitution Guard is a constitutional protection mechanism in the CitizenChain node software. Using the genesis Constitution as its baseline, it independently checks the on-chain constitutional state to prevent Citizen Protocol upgrades from bypassing implemented constitutional protections.</span>
+* 宪法第1、2、3、17、19、24、34、42条为不可修改条款。宪法守卫检查这些条款是否完整保留，拒绝修改、删除、改号或以其他版本隐藏替换不可修改条款的区块。<br><span class="whitepaper-en">Articles 1, 2, 3, 17, 19, 24, 34, and 42 are immutable. The Constitution Guard verifies that these articles remain intact and rejects blocks that modify, delete, renumber, or conceal their replacement through other versions.</span>
+* 第一章总则中允许修改的条款发生变更时，必须记录为特别案，并保存符合规定的公投凭据：参与人数达到有资格选民的70%，且赞成票达到参与人数的70%。所有修宪版本还必须保存至少4名护宪大法官赞成的终审凭据。<br><span class="whitepaper-en">Amendments to amendable provisions in Chapter I, General Principles, must be recorded as special bills and retain referendum records meeting the required thresholds: participation of at least 70% of eligible voters and approval by at least 70% of participants. Every constitutional amendment version must also retain a final-review record showing approval by at least four Constitution-Guarding Grand Justices.</span>
+* 宪法守卫检查宪法身份、有效状态、版本连续性、全文哈希和条文编号，并保护已经形成的历史版本及修宪凭据，防止事后篡改、删除或补写。普通区块导入和完整状态同步均须遵守这些检查。<br><span class="whitepaper-en">The Constitution Guard checks constitutional identity, validity, version continuity, content hashes, and provision numbering. It protects established historical versions and amendment records against later alteration, deletion, or retrospective insertion. These checks apply to both ordinary block imports and full-state synchronization.</span>
+* 宪法守卫核对链上修宪记录及其阈值是否符合规则，不代替投票引擎组织投票和计票。当前修宪凭据保存的是链上计票记录，不是供节点逐票独立验签的完整签名集合。<br><span class="whitepaper-en">The Constitution Guard checks whether on-chain amendment records and their thresholds comply with the rules; it does not replace the voting engine’s voting and tallying functions. Current amendment records contain on-chain tallies rather than a complete collection of signatures for independent verification of every vote by the node.</span>
+
+## 6.3.节点守卫<br><span class="whitepaper-heading-en">6.3. Node Guard</span>
+
+* 节点守卫是公民链节点程序中的基础规则保护机制，与宪法守卫共同构成节点的验证防线。节点启动时核对固定的创世区块哈希和创世状态根，防止连接或装载错误的创世链。<br><span class="whitepaper-en">The Node Guard protects foundational rules within the CitizenChain node software. Together with the Constitution Guard, it forms the node’s validation safeguards. At startup, it verifies the fixed genesis block hash and genesis state root to prevent the use of an incorrect genesis chain.</span>
+* 节点守卫核对创世状态、全节点铸块发行、公民认证发行和省储行质押利息等已实施的永久规则，检查发行条件、金额、收款账户和总发行量变化，防止绕过规定新增发行。<br><span class="whitepaper-en">The Node Guard verifies implemented permanent rules governing genesis state, block-production issuance, citizen certification issuance, and provincial reserve bank staking interest. It checks issuance conditions, amounts, recipient accounts, and changes in total issuance to prevent unauthorized creation of currency.</span>
+* 节点守卫还检查机构CID及生命周期、固定治理机构与岗位、国家机构组成、治理阈值和交易手续费规则，防止公民协议升级破坏已实施的机构与治理约束。<br><span class="whitepaper-en">The Node Guard also checks institutional CIDs and lifecycles, fixed governance institutions and roles, national institutional composition, governance thresholds, and transaction-fee rules. These checks prevent Citizen Protocol upgrades from violating implemented institutional and governance constraints.</span>
+* 导入新区块前，节点守卫通过本节点执行区块并复核状态变化；涉及公民协议升级时，还对候选协议执行相关规则检查。导入方提供的预计算结果不能代替节点自身验证。<br><span class="whitepaper-en">Before importing a new block, the Node Guard executes it locally and verifies the resulting state changes. When a Citizen Protocol upgrade is involved, it also performs the relevant checks on the candidate protocol. Precomputed results supplied by the importing party cannot replace the node’s own verification.</span>
+* 普通区块导入和快速同步取得的完整状态均须经过守卫检查。违反已实施规则或无法完成必要校验的区块与状态不予导入；即使升级提案已经投票通过，也不能自动绕过节点守卫。<br><span class="whitepaper-en">Both ordinary block imports and complete states obtained through fast synchronization must pass guard checks. Blocks and states that violate implemented rules or cannot complete required verification are rejected. Approval of an upgrade proposal does not automatically bypass the Node Guard.</span>
+
+## 6.4.治理机构<br><span class="whitepaper-heading-en">6.4. Governance Institutions</span>
 
 * 国家储委会、省储委会和省储行属于创世治理机构，创世时写入机构、账户和初始管理员；国家储委会与省储委会承担 GRANDPA 最终性投票，省储行承担永久质押和省级储备银行治理。<br><span class="whitepaper-en">The National Reserve Committee, Provincial Reserve Committees, and Provincial Reserve Banks are genesis governance institutions. Their institutions, accounts, and initial administrators are written at genesis. The National and Provincial Reserve Committees participate in GRANDPA finality voting, while Provincial Reserve Banks carry permanent staking and provincial reserve-bank governance.</span>
 * 治理机构节点应以归档全节点形态运行，保存完整链数据并参与节点引导；治理动作必须由准确机构岗位的任职钱包发起，并使用业务模块指定的内部投票、联合投票或其他投票引擎。<br><span class="whitepaper-en">Governance institution nodes should run as archive full nodes, store complete chain data, and participate in node bootstrapping. Governance actions must be proposed by the assignment wallet of the exact institutional role and use the internal, joint, or other voting engine selected by the business module.</span>
 * 国家储委会、省储委会、省储行属于节点桌面端治理范围，不作为普通链上中国网页登录主体；链上中国主要服务注册局和被授权的业务机构管理员。<br><span class="whitepaper-en">The National Reserve Committee, Provincial Reserve Committees, and Provincial Reserve Banks belong to the node-desktop governance scope and are not ordinary OnChina web-console login subjects. OnChina mainly serves registries and authorized business-institution administrators.</span>
 
-## 6.3.链下清算行<br><span class="whitepaper-heading-en">6.3. Off-Chain Clearing Banks</span>
+## 6.5.链下清算行<br><span class="whitepaper-heading-en">6.5. Off-Chain Clearing Banks</span>
 
 * 链下清算行不是新的链上机构类型，而是完成链上注册和节点声明后的全节点清算角色；符合条件的私权机构或其下属非法人组织可运行清算行全节点。<br><span class="whitepaper-en">An off-chain clearing bank is not a new on-chain institution type. It is a clearing role of a full node after on-chain registration and node declaration. Qualified private institutions or their subordinate unincorporated organizations may run clearing-bank full nodes.</span>
 * 清算行提供绑定、充值、提现、切换和扫码支付清算服务；扫码支付由公民端签署支付意图，收款方清算行批量提交链上结算。<br><span class="whitepaper-en">Clearing banks provide binding, deposit, withdrawal, switching, and QR-payment clearing services. For QR payment, CitizenApp signs the payment intent, and the recipient-side clearing bank submits batched on-chain settlement.</span>
