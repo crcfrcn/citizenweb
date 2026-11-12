@@ -59,6 +59,7 @@ body {
   font-weight: 700;
   letter-spacing: 0;
   text-align: center;
+  font-size: 16px;
 }
 
 .whitepaper-toc-title span {
@@ -68,7 +69,7 @@ body {
 .whitepaper-toc-title span:last-child {
   margin-top: 2px;
   color: #92a4bd;
-  font-size: 12px;
+  font-size: inherit;
   font-weight: 600;
 }
 
@@ -106,6 +107,7 @@ body {
   color: #b8c5d8;
   cursor: pointer;
   font: inherit;
+  font-size: 16px;
   line-height: 1.35;
   padding: 7px 10px;
   text-align: left;
@@ -138,7 +140,7 @@ body {
 .whitepaper-toc-text small {
   margin-top: 2px;
   color: #7788a1;
-  font-size: 11px;
+  font-size: inherit;
 }
 
 .whitepaper-body {
@@ -149,7 +151,8 @@ body {
 
 .whitepaper-body h1,
 .whitepaper-body h2,
-.whitepaper-body h3 {
+.whitepaper-body h3,
+.whitepaper-body h4 {
   border-bottom: 1px solid rgb(229 176 32 / 36%);
   scroll-margin-top: 96px;
   color: #ffffff;
@@ -161,14 +164,14 @@ body {
 
 .whitepaper-body h1 {
   margin: 42px 0 16px;
-  font-size: clamp(28px, 4vw, 44px);
+  font-size: 26px;
 }
 
 .whitepaper-body h1:first-child {
   border-bottom: 0;
   margin-top: 0;
   color: var(--color-gold-400);
-  font-size: clamp(32px, 4.8vw, 56px);
+  font-size: 26px;
   padding-bottom: 0;
   text-align: center;
 }
@@ -176,13 +179,18 @@ body {
 .whitepaper-body h2 {
   margin: 34px 0 16px;
   color: var(--color-gold-300);
-  font-size: clamp(22px, 3vw, 32px);
+  font-size: 20px;
 }
 
 .whitepaper-body h3 {
   margin: 28px 0 14px;
   color: #f3d98a;
-  font-size: clamp(18px, 2.2vw, 24px);
+  font-size: 18px;
+}
+
+.whitepaper-body h4 {
+  margin: 24px 0 12px;
+  font-size: 16px;
 }
 
 .whitepaper-body p,
@@ -225,7 +233,7 @@ body {
 .whitepaper-body .whitepaper-en {
   display: block;
   color: #9eb0c9;
-  font-size: 14px;
+  font-size: inherit;
   font-style: normal;
   letter-spacing: 0;
   line-height: 1.75;
@@ -238,7 +246,7 @@ body {
 .whitepaper-body .whitepaper-title-en {
   margin: 3px 0 0;
   color: #ffffff;
-  font-size: clamp(20px, 2.8vw, 32px);
+  font-size: inherit;
   font-weight: 700;
   text-align: center;
 }
@@ -252,6 +260,7 @@ body {
 
 .whitepaper-body .whitepaper-en {
   margin-top: 1px;
+  font-size: 16px;
   padding-left: 14px;
   border-left: 2px solid rgb(229 176 32 / 32%);
   line-height: 1.5;
@@ -281,7 +290,7 @@ body {
 
 .whitepaper-body code {
   font-family: "Noto Sans SC", system-ui, -apple-system, sans-serif;
-  font-size: 0.92em;
+  font-size: 16px;
 }
 
 .whitepaper-table-code {
@@ -304,7 +313,7 @@ body {
   border-bottom: 1px solid rgb(255 255 255 / 10%);
   border-right: 1px solid rgb(255 255 255 / 8%);
   color: #e7eef8;
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.6;
   padding: 10px 12px;
   text-align: left;
@@ -315,6 +324,12 @@ body {
   background: rgb(229 176 32 / 12%);
   color: #f7df9d;
   font-weight: 700;
+}
+
+/* 术语和系统名称按最长字段分配宽度，说明列使用剩余空间。 */
+.whitepaper-table-code .whitepaper-terms :is(th, td):nth-child(-n + 2) {
+  width: 1%;
+  white-space: nowrap;
 }
 
 .whitepaper-table-code tr:last-child td {

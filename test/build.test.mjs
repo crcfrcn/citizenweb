@@ -223,6 +223,71 @@ if(platform!=='web'){
   const names=[],result=JSON.parse(whitepaperContent('# 原文\n![图](./assets/one.png)',name=>{names.push(name);return Buffer.from('synthetic');}));assert.deepEqual(names,['one.png']);assert.equal(result.markdown,'# 原文\n![图](data:image/png;base64,c3ludGhldGlj)');
   assert.equal(JSON.parse(whitepaperContent('纯正文',()=>{throw Error('不应读取图片');})).markdown,'纯正文');
  });
+ test('实际白皮书目录与四个链上中国模块保持一致',async()=>{
+  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
+  const source=readFileSync(join(root,'frontend/pages/Whitepaper.tsx'),'utf8');
+  const functions=source.slice(source.indexOf('function cleanMarkdownText'),source.indexOf('function buildTocTree'));
+  const script=stripTypeScriptTypes('const headingSubtitlePattern=/<span class="(whitepaper-title-en|whitepaper-heading-en)">([^<]+)<\\/span>/;\n'+functions+'\nexport {extractHeadings,removeSourceTableOfContents};');
+  const {extractHeadings,removeSourceTableOfContents}=await import('data:text/javascript;base64,'+Buffer.from(script).toString('base64'));
+  const headings=extractHeadings(removeSourceTableOfContents(markdown));
+  assert.equal(new Set(headings.map(row=>row.id)).size,headings.length);
+  for(const row of headings){
+   const number=/^\d+(?:\.\d+)*/u.exec(row.title)?.[0];
+   if(number)assert.equal(/^\d+(?:\.\d+)*/u.exec(row.subtitle)?.[0],number,row.title);
+  }
+  assert.deepEqual(headings.filter(row=>/^7\.\d/u.test(row.title)).map(row=>[row.title,row.subtitle]),[
+   ['7.1.简介','7.1. Overview'],['7.2.平台框架','7.2. Platform Framework'],
+   ['7.3.注册局','7.3. Registry'],['7.4.立法院','7.4. Legislative Yuan'],
+   ['7.5.司法院','7.5. Judicial Yuan'],['7.6.私权机构','7.6. Private Institutions'],
+  ]);
+  assert.doesNotMatch(markdown,/Citizen Protocol|Node Software|Off-Chain Clearing Banks|节点设置页|runtime\/primitives\/cid\/|runtime_upgrade\.rs|non-unanimous|非全票或超期/u);
+  for(const title of ['4.2. Runtime','5. Runtime','4.3. Node','6. Node','6.5. OffChain Clearing Banks'])assert.ok(headings.some(row=>row.subtitle===title),title);
+ });
+ test('白皮书四个国家储委会账户与公开协议账户夹具一致',()=>{
+  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
+  // 固定公开账户夹具对应 primitives/src/china/china_cb.rs；不读取或生成私钥。
+  const accounts=[
+   ['国家储委会主账户','7c0c099ee4df10c5bd3f618ddf132b6d15390fa27d2c1369f70aeb6b5f3907e5'],
+   ['国家储委会费用账户','fabe3c11d600221ab4156ebaae3c00c8efae939442f4cd1a764cfdf62461a387'],
+   ['安全基金账户','4ac779852c175087c445c35efecfef3ce6e0232702152ea2283f0b5ec3952e53'],
+   ['两和基金账户','da5544a52e806f6e5daeba3e2f0be134b218a9c348f2804b7e933deb9ed84e86'],
+  ];
+  const alphabet='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  for(const [label,account] of accounts){
+   const address=new RegExp('^'+label+'：(\\w+)$','mu').exec(markdown)?.[1];assert.ok(address,label);
+   let value=0n;for(const character of address){const digit=alphabet.indexOf(character);assert.ok(digit>=0);value=value*58n+BigInt(digit);}
+   const hex=value.toString(16),bytes=Buffer.from(hex.padStart(hex.length+hex.length%2,'0'),'hex');
+   assert.equal(bytes.length,36,label);
+   assert.equal(((bytes[0]&63)<<2)|(bytes[1]>>6)|((bytes[1]&63)<<8),2027,label);
+   assert.equal(bytes.subarray(2,34).toString('hex'),account,label);
+   const checksum=createHash('blake2b512').update(Buffer.concat([Buffer.from('SS58PRE'),bytes.subarray(0,34)])).digest().subarray(0,2);
+   assert.ok(checksum.equals(bytes.subarray(34)),label);
+  }
+ });
+ test('发行与销毁英文标题使用实际模块名，重复字段一致',()=>{
+  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
+  const groups=[['genesis','3.1','5.1'],['prbbankissue','3.2','5.7.1'],
+   ['fullnodeissue','3.3','5.7.2'],['citizenissue','3.4','5.7.3'],
+   ['resolutionissue','3.6','5.7.4'],['destroy','3.7','5.3.2']];
+  for(const [name,...numbers] of groups)for(const number of numbers){
+   assert.ok(markdown.includes(`class="whitepaper-heading-en">${number}. ${name}</span>`),`${number}: ${name}`);
+  }
+  assert.doesNotMatch(markdown,/provincialbank-interest|fullnode-issuance|citizen-issuance|resolution-issuance|resolution-destroy/u);
+  // 两和基金由创世配置写入，没有独立发行模块，保留基金名称，不虚构模块标识。
+  assert.ok(markdown.includes('class="whitepaper-heading-en">3.5. Reconciliation Fund Issuance</span>'));
+ });
+ test('实际架构图以双语SVG完整内嵌交付',()=>{
+  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8'),names=[];
+  const delivered=JSON.parse(whitepaperContent(markdown,name=>{names.push(name);return readFileSync(join(root,'frontend/assets',name));})).markdown;
+  assert.deepEqual(names,['whitepaper-node-diagram.svg','whitepaper-reserve-architecture.svg']);
+  assert.doesNotMatch(delivered,/\.\/assets\//u);
+  for(const match of delivered.matchAll(/data:image\/svg\+xml;base64,([A-Za-z0-9+/=]+)/gu)){
+   const svg=Buffer.from(match[1],'base64').toString('utf8');
+   assert.match(svg,/<svg[^>]+viewBox=/u);assert.match(svg,/<title[^>]*>.+<\/title>/u);
+   assert.match(svg,/国家储委会/u);assert.match(svg,/National Reserve Committee/u);
+   assert.doesNotMatch(svg,/公民币区块链|国储会|省储会|<script|<image|href=/u);
+  }
+ });
  test('HTTPS缺件明确失败，配置不含生成插件',()=>{assert.throws(()=>httpsOptions({}),/HTTPS/u);const source=readFileSync(join(root,'config/vite.config.ts'),'utf8');assert.doesNotMatch(source,/generateBundle|writeFile|whitepaperContent|readFileSync/u);});
 }
 

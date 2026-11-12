@@ -197,10 +197,12 @@ function renderTableCodeBlock(code: string) {
   const bodyHtml = bodyRows
     .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`)
     .join('')
+  const isTermsTable = header.length === 3
+    && header[0] === '中文术语' && header[1] === '英文/系统名称' && header[2] === '说明'
 
   return [
     '<div class="whitepaper-table-code">',
-    '<table>',
+    isTermsTable ? '<table class="whitepaper-terms">' : '<table>',
     `<thead><tr>${headerHtml}</tr></thead>`,
     `<tbody>${bodyHtml}</tbody>`,
     '</table>',
