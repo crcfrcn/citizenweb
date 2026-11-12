@@ -223,7 +223,7 @@ if(platform!=='web'){
   const names=[],result=JSON.parse(whitepaperContent('# 原文\n![图](./assets/one.png)',name=>{names.push(name);return Buffer.from('synthetic');}));assert.deepEqual(names,['one.png']);assert.equal(result.markdown,'# 原文\n![图](data:image/png;base64,c3ludGhldGlj)');
   assert.equal(JSON.parse(whitepaperContent('纯正文',()=>{throw Error('不应读取图片');})).markdown,'纯正文');
  });
- test('实际白皮书目录与四个链上中国模块保持一致',async()=>{
+ test('实际白皮书目录完整覆盖Runtime与链上中国模块名称合同',async()=>{
   const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
   const source=readFileSync(join(root,'frontend/pages/Whitepaper.tsx'),'utf8');
   const functions=source.slice(source.indexOf('function cleanMarkdownText'),source.indexOf('function buildTocTree'));
@@ -237,11 +237,68 @@ if(platform!=='web'){
   }
   assert.deepEqual(headings.filter(row=>/^7\.\d/u.test(row.title)).map(row=>[row.title,row.subtitle]),[
    ['7.1.简介','7.1. Overview'],['7.2.平台框架','7.2. Platform Framework'],
-   ['7.3.注册局','7.3. Registry'],['7.4.立法院','7.4. Legislative Yuan'],
-   ['7.5.司法院','7.5. Judicial Yuan'],['7.6.私权机构','7.6. Private Institutions'],
+   ['7.3.注册局','7.3. registry'],['7.4.立法院','7.4. legislation'],
+   ['7.5.司法院','7.5. judicial'],['7.6.私权机构','7.6. private'],
   ]);
+  // 具体模块按当前Cargo包名核对；分组按目录名核对，协议总标题保持Runtime。
+  // 覆盖第5章全部标题，不能只锁定发行模块而漏掉旧实体/投票别名。
+  const chapter5Names={
+   '5':'Runtime','5.1':'genesis','5.2':'votingengine',
+   '5.2.1':'internalvote','5.2.2':'jointvote','5.2.3':'legislationvote','5.2.4':'electionvote',
+   '5.3':'governance','5.3.1':'upgrade','5.3.2':'destroy','5.3.3':'grandpakey',
+   '5.4':'admins','5.4.1':'personaladmin','5.4.2':'privateadmin','5.4.3':'publicadmin',
+   '5.5':'public','5.5.1':'legislation','5.5.2':'election',
+   '5.6':'entity','5.6.1':'personalentity','5.6.2':'privateentity','5.6.3':'publicentity',
+   '5.7':'issuance','5.7.1':'prbbankissue','5.7.2':'fullnodeissue','5.7.3':'citizenissue',
+   '5.7.4':'resolutionissue','5.7.5':'onchainissue',
+   '5.8':'transaction','5.8.1':'onchain','5.8.2':'offchain','5.8.3':'multisig',
+   '5.9':'misc','5.9.1':'identity','5.9.2':'difficulty','5.9.3':'address','5.9.4':'square',
+   '5.10':'primitives',
+  };
+  assert.deepEqual(headings.filter(row=>/^5\./u.test(row.title)).map(row=>row.subtitle),
+   Object.entries(chapter5Names).map(([number,name])=>`${number}. ${name}`));
   assert.doesNotMatch(markdown,/Citizen Protocol|Node Software|Off-Chain Clearing Banks|节点设置页|runtime\/primitives\/cid\/|runtime_upgrade\.rs|non-unanimous|非全票或超期/u);
   for(const title of ['4.2. Runtime','5. Runtime','4.3. Node','6. Node','6.5. OffChain Clearing Banks'])assert.ok(headings.some(row=>row.subtitle===title),title);
+ });
+ test('白皮书旧模块别名不回流，链上中国模块引用与机构名称分别保留',()=>{
+  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
+  const stale=['internal-vote','joint-vote','legislation-vote','election-vote','grandpakey-change',
+   'private-admins','public-admins','legislation-yuan','personal-manage','private-manage','public-manage',
+   'onchain-issuance','pow-difficulty','legislative-vote','legislative-voting module',
+   'runtime-upgrade','personal-admins','citizen-identity'];
+  for(const name of stale)assert.ok(!markdown.includes(name),`旧模块名称残留：${name}`);
+  assert.doesNotMatch(markdown,/公民\s*SDK|Citizen\s+SDK/iu);
+  for(const name of ['registry','legislation','judicial','private']){
+   assert.ok(markdown.includes(`The ${name} module`),`正文模块引用缺失：${name}`);
+  }
+  assert.ok(markdown.includes('registry, legislation, judicial, and private modules'));
+  assert.ok(markdown.includes('four modules: registry, legislation, judicial, and private'));
+  for(const name of ['internalvote','jointvote','legislationvote','electionvote'])assert.ok(markdown.includes(`| ${name} |`));
+  // 国家司法院与联邦/市注册局是机构名称，不得被全局替换成软件模块ID。
+  for(const name of ['National Judicial Yuan','Federal Registry Bureau','City Registries'])assert.ok(markdown.includes(name),name);
+ });
+ test('全文机构、基金、币种和CID采用统一名称，不回流旧译名',()=>{
+  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
+  assert.doesNotMatch(markdown,/\bCitizen\s+Coins?\b|identity\s+identification\s+code|Federal\s+Citizen\s+Safety\s+Fund|\bFederal\s+Registry\b(?!\s+Bureau)/iu);
+  assert.ok(markdown.includes('Federal Citizen Security Fund'));
+  assert.ok(markdown.includes('Federal Registry Bureau'));
+  const rows=markdown.split('\n').filter(line=>line.startsWith('|')).map(line=>line.split('|').map(cell=>cell.trim()));
+  assert.equal(rows.find(row=>row[1]==='公民币')?.[2],'GMB');
+  assert.equal(rows.find(row=>row[1]==='身份识别码')?.[2],'CID');
+  assert.doesNotMatch(markdown,/GMBs\b|GMB are freely exchangeable/u);
+ });
+ test('四个补充模块明确实现边界，正文与目录同步',()=>{
+  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
+  for(const [number,title] of [['5.5.2','公民选举模块'],['5.9.3','地址变更上链'],['5.9.4','广场内容与会员订阅'],['5.10','协议基础库']]){
+   assert.ok(markdown.includes(`[${number}. ${title}](#${number.replaceAll('.','')}${title})`));
+  }
+  const election=markdown.split('### 5.5.2.公民选举模块')[1].split('## 5.6.')[0];
+  assert.match(election,/不提供交易入口、业务存储或事件/u);
+  assert.match(election,/electionvote/u);
+  assert.match(markdown,/完整地址库由链上中国的本地地址库维护/u);
+  assert.match(markdown,/文章正文和媒体文件保存在链下内容存储中/u);
+  assert.match(markdown,/签名取消后停止续扣/u);
+  assert.match(markdown,/不是独立业务pallet，不提供交易入口或业务存储/u);
  });
  test('白皮书四个国家储委会账户与公开协议账户夹具一致',()=>{
   const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
