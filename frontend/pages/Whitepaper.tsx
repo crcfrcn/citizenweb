@@ -1,12 +1,10 @@
 import { useMemo, useState } from 'react'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import whitepaperMarkdown from '../whitepaper.md?raw'
+import whitepaperMarkdown from '@citizenchain/CitizenChainWhitepaper.md?raw'
 
-// 白皮书正文归入 citizenweb/frontend/whitepaper.md；图片仍通过 Vite glob 打包 citizenweb/frontend/assets/*，
-// 渲染前把 markdown 里的 ./assets/<file> 替换成打包 URL（保证线上能加载，
-// 同时保留现有白皮书图片资源目录）。
-const whitepaperAssetUrls = import.meta.glob('../assets/*', {
+// 正文与两张配图只维护在公民链仓库，Vite 从同一真源打包；渲染与交互保持原样。
+const whitepaperAssetUrls = import.meta.glob('@citizenchain/icons/whitepaper-*.svg', {
   eager: true,
   query: '?url',
   import: 'default',
@@ -219,7 +217,7 @@ function renderCodeTables(markdown: string) {
 
 function resolveAssetUrls(markdown: string) {
   return markdown.replace(
-    /(["'(])(?:\.\/)?assets\/([A-Za-z0-9._-]+)/g,
+    /(["'(])(?:\.\/)?icons\/([A-Za-z0-9._-]+)/g,
     (whole, lead: string, file: string) => {
       const url = assetUrlByName.get(file)
       return url ? `${lead}${url}` : whole

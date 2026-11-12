@@ -14,6 +14,7 @@ defaults:
     shell: bash
 env:
   PLATFORM: web
+  CITIZENCHAIN_WHITEPAPER_ROOT: ${{ github.workspace }}/target/whitepaper-source
   PRODUCT_WORK: ${{ github.workspace }}/target/build/${{ github.run_id }}-${{ github.run_attempt }}
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
 jobs:
@@ -60,6 +61,18 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: 读取公民链白皮书唯一真源
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: crcfrcn/citizenchain
+          ref: main
+          path: target/whitepaper-source
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /CitizenChainWhitepaper.md
+            /icons/whitepaper-node-diagram.svg
+            /icons/whitepaper-reserve-architecture.svg
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:

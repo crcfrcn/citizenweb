@@ -4,10 +4,67 @@ import {createHash} from 'node:crypto';
 import {stripTypeScriptTypes} from 'node:module';
 import {mkdtempSync,mkdirSync,cpSync,readFileSync,rmSync,existsSync,readdirSync,writeFileSync,chmodSync} from 'node:fs';
 import {join,dirname} from 'node:path';
-import {root,displayName,run} from '../scripts/build.mjs';
+import {root,whitepaperRoot,displayName,run} from '../scripts/build.mjs';
 import {constitutionFiles,constitutionTools,describeAction} from '../scripts/config.mjs';
 import {initialVersion,platforms,repository} from '../scripts/build.mjs';
 const platform=Object.keys(platforms)[0];
+// 官网宪法使用自己的历史界面；节点 HTML 只提供正文，不执行其脚本或样式。
+async function constitutionReader(){
+ const source=readFileSync(join(root,'frontend/pages/Constitution.tsx'),'utf8');
+ const plain=source.slice(source.indexOf('interface ConstitutionClause'),source.indexOf('const chapterAnchor'));
+ return import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(plain+'\nexport {assembleChapters,decodeDocument};')).toString('base64'));
+}
+test('官网宪法章节、节、条与中英正文、不可修改标记完整保留',async()=>{
+ const {assembleChapters}=await constitutionReader();
+ const article={number:1,title_cn:'第一条',title_en:'Article 1',body_cn:'正文 <原文> & 符号',body_en:'Body <text> & symbols',
+  immutable:true,clauses:[{text_cn:'第一款\n第二行',text_en:'Clause one\nsecond line'},{text_cn:'第二款',text_en:null}]};
+ const chapters=assembleChapters([
+  {kind:'chapter',value:{number:1,title_cn:'第一章 总则',title_en:'Chapter I'}},
+  {kind:'section',chapter:1,value:{number:1,title_cn:'第一节',title_en:'Section 1'}},
+  {kind:'article',value:article},
+  {kind:'section',chapter:1,value:{number:2,title_cn:'第二节',title_en:null}},
+  {kind:'article',value:{...article,number:2,immutable:false,clauses:[]}},
+  {kind:'chapter',value:{number:2,title_cn:'第二章',title_en:null}},
+  {kind:'section',chapter:2,value:{number:1,title_cn:'第一节',title_en:null}},
+  {kind:'article',value:{...article,number:3}},
+ ]);
+ assert.equal(chapters.length,2);assert.equal(chapters[0].sections.length,2);
+ assert.deepEqual(chapters[0].sections[0].articles,[article]);
+ assert.equal(chapters[0].sections[1].articles[0].immutable,false);
+ assert.equal(chapters[1].sections[0].articles[0].number,3);
+ assert.equal(chapters[1].sections[0].articles[0].clauses.length,2);
+});
+test('官网宪法拒绝缺章缺节、重复编号和异常接口，避免静默漏条',async()=>{
+ const {assembleChapters,decodeDocument}=await constitutionReader();
+ const chapter={kind:'chapter',value:{number:1,title_cn:'章',title_en:null}};
+ const section={kind:'section',chapter:1,value:{number:1,title_cn:'节',title_en:null}};
+ const article={kind:'article',value:{number:1,title_cn:'条',title_en:null,body_cn:'正文',body_en:null,immutable:false,clauses:[]}};
+ for(const blocks of [[],[section],[chapter,article],[chapter,chapter],[chapter,{...section,chapter:2}],
+  [chapter,section,article,article],[{...chapter,value:{...chapter.value,number:0}}]]){
+  assert.throws(()=>assembleChapters(blocks),/宪法/u);
+ }
+ for(const value of [null,{}, {html:'',blake2_256:'0x'+'1'.repeat(64),source:'legislation-raw'},
+  {html:'<html/>',blake2_256:'broken',source:'legislation-raw'},
+  {html:'<html/>',blake2_256:'0x'+'1'.repeat(64),source:'other'}])assert.throws(()=>decodeDocument(value),/宪法/u);
+});
+test('官网宪法恢复原目录及返回顶部，样式限定官网且正文仍由现有接口提供',()=>{
+ const source=readFileSync(join(root,'frontend/pages/Constitution.tsx'),'utf8');
+ assert.match(source,/fetch\('\/constitution\/data'/u);
+ assert.match(source,/new DOMParser\(\)\.parseFromString/u);
+ assert.match(source,/aria-label="公民宪法目录"/u);
+ assert.match(source,/aria-expanded=\{chapterOpen\}/u);assert.match(source,/aria-expanded=\{sectionOpen\}/u);
+ assert.match(source,/setOpenKeys\(new Set\(\[`c\$\{document\.chapters\[0\]\.number\}`\]\)\)/u);
+ assert.match(source,/href=\{`#\$\{articleAnchor\(article\.number\)\}`\}/u);
+ assert.match(source,/window\.scrollTo\(\{ top: 0, behavior: 'smooth' \}\)/u);
+ assert.match(source,/不可修改条款 · Immutable/u);assert.match(source,/versionLabel\?\.cn/u);
+ assert.doesNotMatch(source,/<iframe|srcDoc=|dangerouslySetInnerHTML/u);
+ const css=readFileSync(join(root,'frontend/index.css'),'utf8').split('/* 官网宪法恢复历史阅读界面；节点模板与白皮书样式保持独立。 */')[1];
+ assert.ok(css);const selectors=[...css.matchAll(/(?:^|\n)(\.[^{]+)\{/gu)].map(match=>match[1].trim());
+ assert.ok(selectors.length>=8);
+ for(const selector of selectors)for(const item of selector.split(','))assert.ok(item.trim().startsWith('.constitution-page '),item);
+ assert.match(css,/font-size: clamp\(22px, 3vw, 32px\)/u);
+ assert.match(css,/font-size: clamp\(18px, 2\.2vw, 24px\)/u);
+});
 test('公民链下载按所选平台取最新正式包',async()=>{
  const source=readFileSync(join(root,'frontend/components/DownloadButton.tsx'),'utf8');
  // 只装载组件中的下载逻辑，Node 回归无需启动 React 或下载安装包。
@@ -220,11 +277,25 @@ if(platform!=='web'){
 }else{
  const {whitepaperContent,httpsOptions}=await import('../scripts/build.mjs');
  test('白皮书正文和内嵌图片交付保持',()=>{
-  const names=[],result=JSON.parse(whitepaperContent('# 原文\n![图](./assets/one.png)',name=>{names.push(name);return Buffer.from('synthetic');}));assert.deepEqual(names,['one.png']);assert.equal(result.markdown,'# 原文\n![图](data:image/png;base64,c3ludGhldGlj)');
+  const names=[],result=JSON.parse(whitepaperContent('# 原文\n![图](./icons/one.png)',name=>{names.push(name);return Buffer.from('synthetic');}));assert.deepEqual(names,['one.png']);assert.equal(result.markdown,'# 原文\n![图](data:image/png;base64,c3ludGhldGlj)');
   assert.equal(JSON.parse(whitepaperContent('纯正文',()=>{throw Error('不应读取图片');})).markdown,'纯正文');
  });
+ test('官网只消费公民链根白皮书，CI与本机使用同一正文和配图',()=>{
+  assert.ok(existsSync(join(whitepaperRoot,'CitizenChainWhitepaper.md')));
+  assert.equal(existsSync(join(root,'frontend/whitepaper.md')),false);
+  const component=readFileSync(join(root,'frontend/pages/Whitepaper.tsx'),'utf8');
+  assert.match(component,/@citizenchain\/CitizenChainWhitepaper\.md\?raw/u);
+  assert.match(component,/@citizenchain\/icons\/whitepaper-\*\.svg/u);
+  const workflow=readFileSync(join(root,'.github/workflows/web.yml'),'utf8');
+  assert.match(workflow,/repository: crcfrcn\/citizenchain/u);
+  assert.match(workflow,/CITIZENCHAIN_WHITEPAPER_ROOT:/u);
+  for(const name of ['whitepaper-node-diagram.svg','whitepaper-reserve-architecture.svg']){
+   assert.ok(workflow.includes('/icons/'+name));
+   assert.equal(existsSync(join(root,'frontend/assets',name)),false);
+  }
+ });
  test('实际白皮书目录完整覆盖Runtime与链上中国模块名称合同',async()=>{
-  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
+  const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8');
   const source=readFileSync(join(root,'frontend/pages/Whitepaper.tsx'),'utf8');
   const functions=source.slice(source.indexOf('function cleanMarkdownText'),source.indexOf('function buildTocTree'));
   const script=stripTypeScriptTypes('const headingSubtitlePattern=/<span class="(whitepaper-title-en|whitepaper-heading-en)">([^<]+)<\\/span>/;\n'+functions+'\nexport {extractHeadings,removeSourceTableOfContents};');
@@ -243,17 +314,16 @@ if(platform!=='web'){
   // 具体模块按当前Cargo包名核对；分组按目录名核对，协议总标题保持Runtime。
   // 覆盖第5章全部标题，不能只锁定发行模块而漏掉旧实体/投票别名。
   const chapter5Names={
-   '5':'Runtime','5.1':'genesis','5.2':'votingengine',
-   '5.2.1':'internalvote','5.2.2':'jointvote','5.2.3':'legislationvote','5.2.4':'electionvote',
-   '5.3':'governance','5.3.1':'upgrade','5.3.2':'destroy','5.3.3':'grandpakey',
-   '5.4':'admins','5.4.1':'personaladmin','5.4.2':'privateadmin','5.4.3':'publicadmin',
-   '5.5':'public','5.5.1':'legislation','5.5.2':'election',
-   '5.6':'entity','5.6.1':'personalentity','5.6.2':'privateentity','5.6.3':'publicentity',
-   '5.7':'issuance','5.7.1':'prbbankissue','5.7.2':'fullnodeissue','5.7.3':'citizenissue',
-   '5.7.4':'resolutionissue','5.7.5':'onchainissue',
-   '5.8':'transaction','5.8.1':'onchain','5.8.2':'offchain','5.8.3':'multisig',
-   '5.9':'misc','5.9.1':'identity','5.9.2':'difficulty','5.9.3':'address','5.9.4':'square',
-   '5.10':'primitives',
+   '5':'Runtime','5.1':'genesis','5.2':'primitives','5.3':'votingengine',
+   '5.3.1':'internalvote','5.3.2':'jointvote','5.3.3':'legislationvote','5.3.4':'electionvote',
+   '5.4':'governance','5.4.1':'upgrade','5.4.2':'destroy','5.4.3':'grandpakey',
+   '5.5':'admins','5.5.1':'personaladmin','5.5.2':'privateadmin','5.5.3':'publicadmin',
+   '5.6':'public','5.6.1':'legislation','5.6.2':'election',
+   '5.7':'entity','5.7.1':'personalentity','5.7.2':'privateentity','5.7.3':'publicentity',
+   '5.8':'issuance','5.8.1':'prbbankissue','5.8.2':'fullnodeissue','5.8.3':'citizenissue',
+   '5.8.4':'resolutionissue','5.8.5':'onchainissue',
+   '5.9':'transaction','5.9.1':'onchain','5.9.2':'offchain','5.9.3':'multisig',
+   '5.10':'misc','5.10.1':'identity','5.10.2':'difficulty','5.10.3':'address','5.10.4':'square',
   };
   assert.deepEqual(headings.filter(row=>/^5\./u.test(row.title)).map(row=>row.subtitle),
    Object.entries(chapter5Names).map(([number,name])=>`${number}. ${name}`));
@@ -261,7 +331,7 @@ if(platform!=='web'){
   for(const title of ['4.2. Runtime','5. Runtime','4.3. Node','6. Node','6.5. OffChain Clearing Banks'])assert.ok(headings.some(row=>row.subtitle===title),title);
  });
  test('白皮书旧模块别名不回流，链上中国模块引用与机构名称分别保留',()=>{
-  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
+  const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8');
   const stale=['internal-vote','joint-vote','legislation-vote','election-vote','grandpakey-change',
    'private-admins','public-admins','legislation-yuan','personal-manage','private-manage','public-manage',
    'onchain-issuance','pow-difficulty','legislative-vote','legislative-voting module',
@@ -278,7 +348,7 @@ if(platform!=='web'){
   for(const name of ['National Judicial Yuan','Federal Registry Bureau','City Registries'])assert.ok(markdown.includes(name),name);
  });
  test('全文机构、基金、币种和CID采用统一名称，不回流旧译名',()=>{
-  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
+  const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8');
   assert.doesNotMatch(markdown,/\bCitizen\s+Coins?\b|identity\s+identification\s+code|Federal\s+Citizen\s+Safety\s+Fund|\bFederal\s+Registry\b(?!\s+Bureau)/iu);
   assert.ok(markdown.includes('Federal Citizen Security Fund'));
   assert.ok(markdown.includes('Federal Registry Bureau'));
@@ -288,11 +358,11 @@ if(platform!=='web'){
   assert.doesNotMatch(markdown,/GMBs\b|GMB are freely exchangeable/u);
  });
  test('四个补充模块明确实现边界，正文与目录同步',()=>{
-  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
-  for(const [number,title] of [['5.5.2','公民选举模块'],['5.9.3','地址变更上链'],['5.9.4','广场内容与会员订阅'],['5.10','协议基础库']]){
+  const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8');
+  for(const [number,title] of [['5.2','协议基础库'],['5.6.2','公民选举模块'],['5.10.3','地址变更上链'],['5.10.4','广场内容与会员订阅']]){
    assert.ok(markdown.includes(`[${number}. ${title}](#${number.replaceAll('.','')}${title})`));
   }
-  const election=markdown.split('### 5.5.2.公民选举模块')[1].split('## 5.6.')[0];
+  const election=markdown.split('### 5.6.2.公民选举模块')[1].split('## 5.7.')[0];
   assert.match(election,/不提供交易入口、业务存储或事件/u);
   assert.match(election,/electionvote/u);
   assert.match(markdown,/完整地址库由链上中国的本地地址库维护/u);
@@ -301,7 +371,7 @@ if(platform!=='web'){
   assert.match(markdown,/不是独立业务pallet，不提供交易入口或业务存储/u);
  });
  test('白皮书四个国家储委会账户与公开协议账户夹具一致',()=>{
-  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
+  const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8');
   // 固定公开账户夹具对应 primitives/src/china/china_cb.rs；不读取或生成私钥。
   const accounts=[
    ['国家储委会主账户','7c0c099ee4df10c5bd3f618ddf132b6d15390fa27d2c1369f70aeb6b5f3907e5'],
@@ -322,10 +392,10 @@ if(platform!=='web'){
   }
  });
  test('发行与销毁英文标题使用实际模块名，重复字段一致',()=>{
-  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8');
-  const groups=[['genesis','3.1','5.1'],['prbbankissue','3.2','5.7.1'],
-   ['fullnodeissue','3.3','5.7.2'],['citizenissue','3.4','5.7.3'],
-   ['resolutionissue','3.6','5.7.4'],['destroy','3.7','5.3.2']];
+  const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8');
+  const groups=[['genesis','3.1','5.1'],['prbbankissue','3.2','5.8.1'],
+   ['fullnodeissue','3.3','5.8.2'],['citizenissue','3.4','5.8.3'],
+   ['resolutionissue','3.6','5.8.4'],['destroy','3.7','5.4.2']];
   for(const [name,...numbers] of groups)for(const number of numbers){
    assert.ok(markdown.includes(`class="whitepaper-heading-en">${number}. ${name}</span>`),`${number}: ${name}`);
   }
@@ -334,10 +404,10 @@ if(platform!=='web'){
   assert.ok(markdown.includes('class="whitepaper-heading-en">3.5. Reconciliation Fund Issuance</span>'));
  });
  test('实际架构图以双语SVG完整内嵌交付',()=>{
-  const markdown=readFileSync(join(root,'frontend/whitepaper.md'),'utf8'),names=[];
-  const delivered=JSON.parse(whitepaperContent(markdown,name=>{names.push(name);return readFileSync(join(root,'frontend/assets',name));})).markdown;
+  const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8'),names=[];
+  const delivered=JSON.parse(whitepaperContent(markdown,name=>{names.push(name);return readFileSync(join(whitepaperRoot,'icons',name));})).markdown;
   assert.deepEqual(names,['whitepaper-node-diagram.svg','whitepaper-reserve-architecture.svg']);
-  assert.doesNotMatch(delivered,/\.\/assets\//u);
+  assert.doesNotMatch(delivered,/\.\/icons\//u);
   for(const match of delivered.matchAll(/data:image\/svg\+xml;base64,([A-Za-z0-9+/=]+)/gu)){
    const svg=Buffer.from(match[1],'base64').toString('utf8');
    assert.match(svg,/<svg[^>]+viewBox=/u);assert.match(svg,/<title[^>]*>.+<\/title>/u);

@@ -14,6 +14,9 @@ export const platforms=Object.freeze({web:'Web'});
 export const initialVersion='1.0.12';
 const artifactPrefix='公民官网·Web·v',artifactFilePrefix='citizenweb-web-v';
 export const root=fileURLToPath(new URL('../',import.meta.url));
+// 本机取相邻公民链仓库；GitHub 工作流指定本轮检出的同一真源。
+export const whitepaperRoot=resolve(process.env.CITIZENCHAIN_WHITEPAPER_ROOT||join(root,'../citizenchain'));
+const whitepaperFiles=['CitizenChainWhitepaper.md','icons/whitepaper-node-diagram.svg','icons/whitepaper-reserve-architecture.svg'];
 const controller=new AbortController();
 export function displayName(platform,version){
  if(!Object.hasOwn(platforms,platform)||typeof version!=='string'||version.length>64||!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(version))throw Error('产品平台或版本无效');
@@ -83,7 +86,7 @@ const assetCount=()=>3;
 // 白皮书是产品交付内容；配置只声明Vite参数，不生成文件。
 export function whitepaperContent(markdown,readImage){
  const mime={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',svg:'image/svg+xml'};
- const content=markdown.replace(/\.\/assets\/([A-Za-z0-9._-]+\.(png|jpg|jpeg|webp|gif|svg))/gu,(_match,name,extension)=>`data:${mime[extension]};base64,${readImage(name).toString('base64')}`);
+ const content=markdown.replace(/\.\/icons\/([A-Za-z0-9._-]+\.(png|jpg|jpeg|webp|gif|svg))/gu,(_match,name,extension)=>`data:${mime[extension]};base64,${readImage(name).toString('base64')}`);
  return JSON.stringify({markdown:content})+'\n';
 }
 export function httpsOptions(environment=process.env){
@@ -92,6 +95,10 @@ export function httpsOptions(environment=process.env){
 }
 function webEnvironment(work,cache){return {npm_config_cache:join(cache.base,'npm'),TMPDIR:directory(join(work,'tmp')),CI:'true',WRANGLER_SEND_METRICS:'false'};}
 async function prepareWeb(work,env){
+ // 只在本轮临时构建目录快照正文和两张配图，官网仓库不保留可编辑副本。
+ const source=join(work,'citizenchain');
+ for(const file of whitepaperFiles)copy(join(whitepaperRoot,file),join(source,file));
+ env.CITIZENCHAIN_WHITEPAPER_ROOT=source;
  const project=sourceView(work,['frontend','constitution','config','scripts','test','index.html','tsconfig.json','package.json','package-lock.json']);
  await run('npm',['ci','--prefer-offline','--no-audit','--no-fund'],{cwd:project,env});
  if(!readFileSync(join(project,'package-lock.json')).equals(readFileSync(join(root,'package-lock.json'))))throw Error('npm原锁改变');return project;
@@ -142,7 +149,7 @@ async function buildWeb(verify,test){
    await run('cargo',['test','--offline','--locked','--manifest-path','constitution/Cargo.toml'],{cwd:project,env});
   }
   await run('npm',['exec','--no','--','vite','build','--config','config/vite.config.ts','--outDir',dist],{cwd:project,env});
-  put(join(dist,'whitepaper/content.json'),whitepaperContent(readFileSync(join(project,'frontend/whitepaper.md'),'utf8'),name=>readFileSync(join(project,'frontend/assets',name))));
+  put(join(dist,'whitepaper/content.json'),whitepaperContent(readFileSync(join(env.CITIZENCHAIN_WHITEPAPER_ROOT,'CitizenChainWhitepaper.md'),'utf8'),name=>readFileSync(join(env.CITIZENCHAIN_WHITEPAPER_ROOT,'icons',name))));
   await buildConstitution(project,env,dist);
   if(!lstatSync(join(dist,'index.html')).isFile())throw Error('官网入口未生成');
   // 用锁定 Wrangler 装配同一个 dist，临时上传包只用于本轮运行时回归。
@@ -183,7 +190,7 @@ export async function packageProduct(){
 async function development(){
  nodeCheck();const {createRequire}=await import('node:module'),{createSecureContext}=await import('node:tls');
  const options=httpsOptions();createSecureContext(options);const require=createRequire(join(root,'package.json')),{createServer}=await import(pathToFileURL(require.resolve('vite')));
- const server=await createServer({configFile:join(root,'config/vite.config.ts'),root,server:{https:options,port:5199,strictPort:true,fs:{allow:[root]}}});
+ const server=await createServer({configFile:join(root,'config/vite.config.ts'),root,server:{https:options,port:5199,strictPort:true,fs:{allow:[root,whitepaperRoot]}}});
  await server.listen();server.printUrls();controller.signal.addEventListener('abort',()=>void server.close(),{once:true});return new Promise(done=>server.httpServer.once('close',done));
 }
 async function main(){
