@@ -1,3 +1,5 @@
+// 展示官网页脚导航和版权信息。
+
 import { Link } from 'react-router-dom'
 import flagEmblem from '../assets/flag-emblem.png'
 

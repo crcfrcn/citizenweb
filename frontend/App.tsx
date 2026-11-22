@@ -1,3 +1,5 @@
+// 装配官网页面路由、共享页头页脚及页面切换后的滚动复位。
+
 import { Routes, Route, useLocation } from 'react-router-dom'
 import { Suspense, lazy, useEffect } from 'react'
 import Header from './components/Header'

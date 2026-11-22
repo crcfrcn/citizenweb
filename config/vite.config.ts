@@ -1,3 +1,5 @@
+// 配置React和Tailwind构建、白皮书源码别名及网站缓存与输出目录。
+
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'

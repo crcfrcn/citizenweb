@@ -1,3 +1,5 @@
+// 配置网站TypeScript、React Hooks与热更新代码的静态检查规则。
+
 import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'

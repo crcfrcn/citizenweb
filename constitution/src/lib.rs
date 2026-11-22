@@ -1,3 +1,5 @@
+//! 实现宪法正文Worker，校验链来源并通过R2缓存和共享租约控制回源。
+
 #![cfg(any(test, target_arch = "wasm32"))]
 
 use serde::Deserialize;

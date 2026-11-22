@@ -1,3 +1,5 @@
+//! 验证宪法缓存到期和正文响应的链来源、结构及大小边界。
+
 use super::*;
 use serde_json::json;
 

@@ -1,3 +1,5 @@
+// 声明公民官网的配置项、构建工具和自动化及发布入口。
+
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 // 本产品配置需求的公开入口；只登记名称、类型和规则，不保存配置值。

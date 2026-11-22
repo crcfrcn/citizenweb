@@ -1,4 +1,5 @@
-# 产品自己的唯一自动化工作流；配置文件不执行编译或GitHub操作。
+# 编译并验收官网及宪法Worker，交付正式Web资产并维护记录。
+
 name: 公民官网·Web
 run-name: 公民官网·Web·${{ github.run_number }}
 'on':

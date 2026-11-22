@@ -1,3 +1,5 @@
+// 展示桌面与移动端导航，并标识当前页面。
+
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import flagEmblem from '../assets/flag-emblem.png'

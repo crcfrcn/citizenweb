@@ -1,3 +1,5 @@
+// 介绍公民体系的理念、目标及核心价值。
+
 import SectionTitle from '../components/SectionTitle'
 import GlowCard from '../components/GlowCard'
 

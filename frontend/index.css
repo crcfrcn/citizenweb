@@ -1,3 +1,5 @@
+/* 定义官网主题、字体和页面组件的全局样式。 */
+
 @import "tailwindcss";
 
 @theme {

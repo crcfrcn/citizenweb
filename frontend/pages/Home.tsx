@@ -1,3 +1,5 @@
+// 展示公民体系概览、关键数据和核心能力入口。
+
 import { Link } from 'react-router-dom'
 import GlowCard from '../components/GlowCard'
 

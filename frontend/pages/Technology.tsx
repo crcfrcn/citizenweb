@@ -1,3 +1,5 @@
+// 介绍公民链技术栈、业务模块及网络架构。
+
 import SectionTitle from '../components/SectionTitle'
 import GlowCard from '../components/GlowCard'
 

@@ -1,3 +1,5 @@
+// 展示公民币发行、分配、手续费及经济模型。
+
 import SectionTitle from '../components/SectionTitle'
 import GlowCard from '../components/GlowCard'
 

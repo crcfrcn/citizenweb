@@ -1,3 +1,5 @@
+// 验证官网正式资产、归档与发布准备的真实性及异常处理。
+
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,symlinkSync,chmodSync} from 'node:fs';

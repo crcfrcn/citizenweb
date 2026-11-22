@@ -1,3 +1,5 @@
+// 提供可选金色或蓝色悬停光晕的内容卡片。
+
 import { type ReactNode } from 'react'
 
 interface GlowCardProps {

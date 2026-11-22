@@ -1,9 +1,11 @@
+// 展示支持渠道、使用帮助和常见问题。
+
 import SectionTitle from '../components/SectionTitle'
 
 const supportItems = [
   {
-    title: '公民账户与 CID',
-    content: 'CID 注册、注销和绑定 AccountId 等动权操作以公民链最终确认状态为准；普通资料、广场和聊天服务由公民服务端处理。',
+    title: '公民账户与身份CID号',
+    content: '身份CID号注册、注销和绑定 AccountId 等动权操作以公民链最终确认状态为准；普通资料、广场和聊天服务由公民服务端处理。',
   },
   {
     title: '公民聊天',

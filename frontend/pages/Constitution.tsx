@@ -1,3 +1,5 @@
+// 读取并校验宪法正文，按章、节、条呈现双语内容和目录导航。
+
 import { useEffect, useState } from 'react'
 
 interface ConstitutionClause {

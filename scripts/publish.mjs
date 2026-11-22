@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// 官网发布独立核验成功自动化的正式资产，拥有Pages上传与部署回读；不创建Tag或Release。
+// 核验官网正式发布包，准备冷签授权并上传到Cloudflare Pages。
+// 回读部署结果及公开访问状态。
+
 import {createHash} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
 import {mkdirSync,mkdtempSync,writeFileSync,readFileSync,rmSync,readdirSync,lstatSync} from 'node:fs';

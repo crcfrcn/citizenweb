@@ -1,3 +1,5 @@
+// 渲染带副标题和说明的通用章节标题。
+
 interface SectionTitleProps {
   subtitle: string
   title: string

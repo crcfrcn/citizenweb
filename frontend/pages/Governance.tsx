@@ -1,3 +1,5 @@
+// 介绍治理机构、权力分工和链上投票机制。
+
 import SectionTitle from '../components/SectionTitle'
 import GlowCard from '../components/GlowCard'
 

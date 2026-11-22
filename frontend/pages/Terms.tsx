@@ -1,3 +1,5 @@
+// 展示公民服务的使用条款和责任约定。
+
 import SectionTitle from '../components/SectionTitle'
 
 interface TermsSectionProps {
@@ -34,8 +36,8 @@ export default function Terms() {
           <p>下载、访问或使用产品即表示用户已经阅读并同意本协议及隐私政策；不同意时应停止使用产品。</p>
         </TermsSection>
 
-        <TermsSection title="二、账户、CID 与钱包控制权">
-          <p>一个钱包 AccountId 可以依链上规则绑定一个 CID。当前默认钱包账户决定当前默认用户；切换默认账户不删除其他 CID 的本地数据。</p>
+        <TermsSection title="二、账户、身份CID号与钱包控制权">
+          <p>一个钱包 AccountId 可以依链上规则绑定一个身份CID号。当前默认钱包账户决定当前默认用户；切换默认账户不删除其他身份CID号的本地数据。</p>
           <p>注册、注销、换绑、发布、订阅和交易等动权或动钱操作，以用户签名且链上最终确认的结果为准。</p>
           <p>用户必须自行保护设备、助记词、私钥和恢复资料。运营方不会索取助记词或私钥，也无法恢复遗失的根机密。</p>
         </TermsSection>

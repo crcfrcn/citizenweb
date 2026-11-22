@@ -1,3 +1,5 @@
+// 渲染并净化公民链白皮书Markdown，生成双语标题、图片和章节目录。
+
 import { useMemo, useState } from 'react'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
