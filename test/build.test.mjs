@@ -317,18 +317,21 @@ if(platform!=='web'){
   // 覆盖第5章全部标题，不能只锁定发行模块而漏掉旧实体/投票别名。
   const chapter5Names={
    '5':'Runtime','5.1':'genesis','5.2':'primitives','5.3':'votingengine',
-   '5.3.1':'internalvote','5.3.2':'jointvote','5.3.3':'legislationvote','5.3.4':'electionvote',
+   '5.3.1':'engingcore','5.3.2':'internalvote','5.3.3':'jointvote','5.3.4':'legislationvote','5.3.5':'electionvote',
    '5.4':'governance','5.4.1':'upgrade','5.4.2':'destroy','5.4.3':'grandpakey',
-   '5.5':'admins','5.5.1':'personaladmin','5.5.2':'privateadmin','5.5.3':'publicadmin',
-   '5.6':'public','5.6.1':'legislation','5.6.2':'election',
-   '5.7':'entity','5.7.1':'personalentity','5.7.2':'privateentity','5.7.3':'publicentity',
-   '5.8':'issuance','5.8.1':'prbbankissue','5.8.2':'fullnodeissue','5.8.3':'citizenissue',
-   '5.8.4':'resolutionissue','5.8.5':'onchainissue',
-   '5.9':'transaction','5.9.1':'onchain','5.9.2':'offchain','5.9.3':'multisig',
-   '5.10':'misc','5.10.1':'identity','5.10.2':'difficulty','5.10.3':'address','5.10.4':'square',
+   '5.5':'public','5.5.1':'legislation','5.5.2':'election',
+   '5.6':'entity','5.6.1':'entitybase','5.6.2':'privateentity','5.6.3':'publicentity',
+   '5.7':'issuance','5.7.1':'prbbankissue','5.7.2':'fullnodeissue','5.7.3':'citizenissue',
+   '5.7.4':'resolutionissue','5.7.5':'onchainissue',
+   '5.8':'transaction','5.8.1':'onchain','5.8.2':'offchain','5.8.3':'multisig','5.8.4':'mldsa',
+   '5.9':'misc','5.9.1':'identity','5.9.2':'difficulty','5.9.3':'address','5.9.4':'square','5.9.5':'personal',
   };
   assert.deepEqual(headings.filter(row=>/^5\./u.test(row.title)).map(row=>row.subtitle),
    Object.entries(chapter5Names).map(([number,name])=>`${number}. ${name}`));
+  const toc=markdown.split('  <summary>5. 公民协议</summary>')[1].split('  </details>')[0];
+  const links=[...toc.matchAll(/\]\(#([^)]+)\)/gu)].map(match=>match[1]);
+  // 原始正文目录采用无标点锚点；官网另行生成自己的目录和带连字符的标题ID。
+  assert.deepEqual(links,headings.filter(row=>/^5\.\d/u.test(row.title)).map(row=>row.title.replaceAll('.','')));
   assert.doesNotMatch(markdown,/Citizen Protocol|Node Software|Off-Chain Clearing Banks|节点设置页|runtime\/primitives\/cid\/|runtime_upgrade\.rs|non-unanimous|非全票或超期/u);
   for(const title of ['4.2. Runtime','5. Runtime','4.3. Node','6. Node','6.5. OffChain Clearing Banks'])assert.ok(headings.some(row=>row.subtitle===title),title);
  });
@@ -337,13 +340,15 @@ if(platform!=='web'){
   const stale=['internal-vote','joint-vote','legislation-vote','election-vote','grandpakey-change',
    'private-admins','public-admins','legislation-yuan','personal-manage','private-manage','public-manage',
    'onchain-issuance','pow-difficulty','legislative-vote','legislative-voting module',
-   'runtime-upgrade','personal-admins','citizen-identity'];
+   'runtime-upgrade','personal-admins','citizen-identity',
+   'admins','personaladmin','privateadmin','publicadmin','personalentity'];
   for(const name of stale)assert.ok(!markdown.includes(name),`旧模块名称残留：${name}`);
   assert.doesNotMatch(markdown,/公民\s*SDK|Citizen\s+SDK/iu);
   for(const name of ['registry','legislation','judicial','private']){
    assert.ok(markdown.includes(`The ${name} module`),`正文模块引用缺失：${name}`);
   }
-  assert.ok(markdown.includes('registry, legislation, judicial, and private modules'));
+  const onchina=markdown.split('## 4.4.链上中国')[1].split('## 4.5.')[0];
+  assert.ok(onchina.includes('four modules: registry, legislation, judicial, and private'));
   assert.ok(markdown.includes('four modules: registry, legislation, judicial, and private'));
   for(const name of ['internalvote','jointvote','legislationvote','electionvote'])assert.ok(markdown.includes(`| ${name} |`));
   // 国家司法院与联邦/市注册局是机构名称，不得被全局替换成软件模块ID。
@@ -359,18 +364,31 @@ if(platform!=='web'){
   assert.equal(rows.find(row=>row[1]==='身份识别码')?.[2],'CID');
   assert.doesNotMatch(markdown,/GMBs\b|GMB are freely exchangeable/u);
  });
- test('四个补充模块明确实现边界，正文与目录同步',()=>{
+ test('基础库及业务模块明确实现边界，正文与目录同步',()=>{
   const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8');
-  for(const [number,title] of [['5.2','协议基础库'],['5.6.2','公民选举模块'],['5.10.3','地址变更上链'],['5.10.4','广场内容与会员订阅']]){
+  for(const [number,title] of [['5.2','协议基础库'],['5.5.2','公民选举'],['5.6.1','实体基础库'],['5.9.3','地址变更'],['5.9.4','广场与订阅'],['5.9.5','个人多签']]){
    assert.ok(markdown.includes(`[${number}. ${title}](#${number.replaceAll('.','')}${title})`));
   }
-  const election=markdown.split('### 5.6.2.公民选举模块')[1].split('## 5.7.')[0];
-  assert.match(election,/不提供交易入口、业务存储或事件/u);
+  const election=markdown.split('### 5.5.2.公民选举')[1].split('## 5.6.')[0];
+  assert.match(election,/尚未提供独立业务调用、业务存储或事件/u);
   assert.match(election,/electionvote/u);
   assert.match(markdown,/完整地址库由链上中国的本地地址库维护/u);
   assert.match(markdown,/文章正文和媒体文件保存在链下内容存储中/u);
   assert.match(markdown,/签名取消后停止续扣/u);
   assert.match(markdown,/不是独立业务pallet，不提供交易入口或业务存储/u);
+  const entity=markdown.split('## 5.6.实体模组')[1].split('## 5.7.发行模组')[0];
+  assert.doesNotMatch(entity,/personal/u);
+  assert.match(entity,/不独立保存链上业务状态，也不提供独立交易入口/u);
+  const personal=markdown.split('### 5.9.5.个人多签')[1].split('# 6.节点程序')[0];
+  assert.match(personal,/不以取得公民 CID 为创建或参与条件/u);
+  assert.match(personal,/neither creation nor participation requires a citizen CID/u);
+  assert.match(markdown,/onchainissue[\s\S]+当前对外业务调用尚未开放/u);
+ });
+ test('机构按真实岗位称呼，个人多签统一使用成员',()=>{
+  const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8');
+  assert.doesNotMatch(markdown,/管理员|\badministrators?\b/iu);
+  for(const role of ['国家储委会委员','省储委会委员','省储行董事','省专员','首席大法官','次席大法官','护宪大法官'])assert.ok(markdown.includes(role),role);
+  assert.ok(markdown.includes('个人多签成员'));
  });
  test('白皮书四个国家储委会账户与公开协议账户夹具一致',()=>{
   const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8');
@@ -395,9 +413,9 @@ if(platform!=='web'){
  });
  test('发行与销毁英文标题使用实际模块名，重复字段一致',()=>{
   const markdown=readFileSync(join(whitepaperRoot,'CitizenChainWhitepaper.md'),'utf8');
-  const groups=[['genesis','3.1','5.1'],['prbbankissue','3.2','5.8.1'],
-   ['fullnodeissue','3.3','5.8.2'],['citizenissue','3.4','5.8.3'],
-   ['resolutionissue','3.6','5.8.4'],['destroy','3.7','5.4.2']];
+  const groups=[['genesis','3.1','5.1'],['prbbankissue','3.2','5.7.1'],
+   ['fullnodeissue','3.3','5.7.2'],['citizenissue','3.4','5.7.3'],
+   ['resolutionissue','3.6','5.7.4'],['destroy','3.7','5.4.2']];
   for(const [name,...numbers] of groups)for(const number of numbers){
    assert.ok(markdown.includes(`class="whitepaper-heading-en">${number}. ${name}</span>`),`${number}: ${name}`);
   }
